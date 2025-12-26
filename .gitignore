@@ -4,7 +4,8 @@ lci-*
 lci-binary
 debug_treesitter
 *.log
-debug*.go
+/debug*.go
+!internal/debug/
 *.exe
 *.dll
 *.so
