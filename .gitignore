@@ -1,7 +1,9 @@
 # Build artifacts
-lci
-lci-*
-lci-binary
+/lci
+/lci-*
+/lci-binary
+cmd/lci/lci
+cmd/lci/lci-*
 debug_treesitter
 *.log
 /debug*.go
@@ -20,7 +22,8 @@ coverage.out
 
 # Profiling files
 *.prof
-profile_*
+/profile_*
+!cmd/profile_*/
 
 # IDE files
 .vscode/
