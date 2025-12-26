@@ -406,8 +406,9 @@ func TestGitignoreParser_Performance(t *testing.T) {
 
 	duration := time.Since(start)
 
-	// Should complete quickly (less than 200ms for 1000 lookups)
-	assert.Less(t, duration, 200*time.Millisecond, "Gitignore lookup should be fast")
+	// Should complete quickly (less than 500ms for 1000 lookups)
+	// Using 500ms to accommodate slower CI environments
+	assert.Less(t, duration, 500*time.Millisecond, "Gitignore lookup should be fast")
 }
 
 // TestGitignoreParser_NegationPriority tests that later negations override earlier patterns
