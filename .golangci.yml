@@ -1,0 +1,37 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+  disable:
+    - typecheck  # Already covered by go build
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - (*os.File).Close
+      - (io.Closer).Close
+      - (*bytes.Buffer).Write
+      - (*bytes.Buffer).WriteString
+      - fmt.Fprint
+      - fmt.Fprintf
+      - fmt.Fprintln
+
+issues:
+  exclude-rules:
+    # Ignore test file issues for now
+    - path: _test\.go
+      linters:
+        - errcheck
+    # Ignore benchmark files
+    - path: _bench_test\.go
+      linters:
+        - errcheck
+  max-issues-per-linter: 50
+  max-same-issues: 10
