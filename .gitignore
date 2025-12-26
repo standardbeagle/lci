@@ -1,0 +1,89 @@
+# Build artifacts
+lci
+lci-*
+lci-binary
+debug_treesitter
+*.log
+debug*.go
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go build cache
+.cache/
+
+# Test coverage
+coverage.out
+*.test
+
+# Profiling files
+*.prof
+profile_*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local development
+.env
+.env.local
+
+# Go-specific patterns
+vendor/
+*.out
+# *.mod and *.sum should NOT be ignored - they are required for Go modules
+# Remove these lines if they were added incorrectly
+
+# Go test artifacts
+*.cover
+coverage.html
+coverage-mcp-*.html
+
+# Test helper artifacts
+testhelpers/test-logs/
+testhelpers/*_report.json
+testdata/perf-*.json
+testdata/bench-*.json
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Air live reload
+.air.toml
+tmp/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Large test fixture projects (323MB total - causes indexing stalls)
+**/workflow_testdata/
+
+# Real-world test projects (cloned via scripts/setup_test_projects.sh)
+# These are pinned to specific commits for reproducible testing
+real_projects/go/
+real_projects/python/
+real_projects/typescript/
+
+# Only exclude actual build artifact documentation, not general docs
+# docs/*_ANALYSIS_BUILD.md
+# docs/*_OPTIMIZATION_BUILD.md
+# Remove overly broad patterns - they exclude valid documentation!
+testing/qualitative/output/
+
+# npm distribution artifacts
+*.tgz
+dist/
+node_modules/
+build-report.txt

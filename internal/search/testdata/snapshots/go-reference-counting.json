@@ -1,0 +1,53 @@
+{
+  "project_name": "go-user-service",
+  "language": "go",
+  "file_count": 4,
+  "symbol_count": 13,
+  "references": {
+    "CreateUser": {
+      "symbol_name": "CreateUser",
+      "incoming_count": 10,
+      "outgoing_count": 8,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 10,
+      "outgoing_refs_length": 8
+    },
+    "GetName": {
+      "symbol_name": "GetName",
+      "incoming_count": 10,
+      "outgoing_count": 5,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 10,
+      "outgoing_refs_length": 5
+    },
+    "GetUser": {
+      "symbol_name": "GetUser",
+      "incoming_count": 7,
+      "outgoing_count": 6,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 7,
+      "outgoing_refs_length": 6
+    },
+    "NewUser": {
+      "symbol_name": "NewUser",
+      "incoming_count": 2,
+      "outgoing_count": 4,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 2,
+      "outgoing_refs_length": 4
+    },
+    "NewUserService": {
+      "symbol_name": "NewUserService",
+      "incoming_count": 2,
+      "outgoing_count": 5,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 2,
+      "outgoing_refs_length": 5
+    }
+  }
+}

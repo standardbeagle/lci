@@ -1,0 +1,44 @@
+{
+  "project_name": "python-user-service",
+  "language": "python",
+  "file_count": 3,
+  "symbol_count": 9,
+  "references": {
+    "User": {
+      "symbol_name": "User",
+      "incoming_count": 4,
+      "outgoing_count": 1,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 4,
+      "outgoing_refs_length": 1
+    },
+    "UserService": {
+      "symbol_name": "UserService",
+      "incoming_count": 4,
+      "outgoing_count": 1,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 4,
+      "outgoing_refs_length": 1
+    },
+    "create_user": {
+      "symbol_name": "create_user",
+      "incoming_count": 7,
+      "outgoing_count": 7,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 7,
+      "outgoing_refs_length": 7
+    },
+    "main": {
+      "symbol_name": "main",
+      "incoming_count": 3,
+      "outgoing_count": 7,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 3,
+      "outgoing_refs_length": 7
+    }
+  }
+}

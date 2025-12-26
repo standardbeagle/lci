@@ -1,0 +1,35 @@
+{
+  "project_name": "js-user-service",
+  "language": "javascript",
+  "file_count": 3,
+  "symbol_count": 13,
+  "references": {
+    "User": {
+      "symbol_name": "User",
+      "incoming_count": 2,
+      "outgoing_count": 1,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 2,
+      "outgoing_refs_length": 1
+    },
+    "UserService": {
+      "symbol_name": "UserService",
+      "incoming_count": 2,
+      "outgoing_count": 1,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 2,
+      "outgoing_refs_length": 1
+    },
+    "createUser": {
+      "symbol_name": "createUser",
+      "incoming_count": 3,
+      "outgoing_count": 6,
+      "has_id": true,
+      "has_file_id": true,
+      "incoming_refs_length": 3,
+      "outgoing_refs_length": 6
+    }
+  }
+}
