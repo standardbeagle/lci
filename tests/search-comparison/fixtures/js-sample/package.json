@@ -1,0 +1,7 @@
+{
+  "name": "js-sample",
+  "version": "1.0.0",
+  "description": "Sample JavaScript project for search testing",
+  "main": "index.js",
+  "type": "commonjs"
+}
