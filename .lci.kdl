@@ -1,0 +1,9 @@
+// LCI Configuration for lightning-docs/lci
+// This configuration excludes test data directories from indexing
+
+project {
+    name "lci"
+}
+
+// Exclude test project directories to avoid indexing test data during development
+exclude "**/real_projects/**"

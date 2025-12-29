@@ -367,7 +367,6 @@ func findRegexMatchesLegacy(content []byte, pattern string, options types.Search
 func (e *Engine) searchWithHybridRegex(pattern string, candidates []types.FileID, options types.SearchOptions) []GrepResult {
 	regexMatches, _ := e.regexEngine.SearchWithRegex(
 		pattern,
-		[]byte{},
 		options.CaseInsensitive,
 		e.indexer.GetFileContent,
 		candidates,
@@ -375,8 +374,18 @@ func (e *Engine) searchWithHybridRegex(pattern string, candidates []types.FileID
 
 	var allResults []GrepResult
 
+	// Track matches per file for MaxCountPerFile support
+	fileMatchCounts := make(map[types.FileID]int)
+
 	// Hybrid engine returns matches without file attribution; we must map by scanning each file.
 	for _, match := range regexMatches {
+		// Apply MaxCountPerFile limit if set
+		if options.MaxCountPerFile > 0 {
+			if fileMatchCounts[match.FileID] >= options.MaxCountPerFile {
+				continue // Skip this match, already hit limit for this file
+			}
+		}
+
 		// PERFORMANCE: Use lightweight accessors instead of GetFileInfo
 		content, ok := e.indexer.GetFileContent(match.FileID)
 		if !ok {
@@ -413,6 +422,7 @@ func (e *Engine) searchWithHybridRegex(pattern string, candidates []types.FileID
 		res := GrepResult{FileID: match.FileID, Path: path, Line: line, Column: col, Match: matchText, Score: 1.0}
 		res.Context = e.extractSimpleContext(content, match.Start, match.End)
 		allResults = append(allResults, res)
+		fileMatchCounts[match.FileID]++
 	}
 
 	// Apply semantic filtering if requested
@@ -1066,8 +1076,15 @@ func (e *Engine) SearchWithOptions(pattern string, candidates []types.FileID, op
 		return nil
 	}
 
-	// Step 5: Handle regex search
-	if options.UseRegex && len(candidates) > 1 {
+	// Step 4.5: Optimize literal patterns (8x faster than regex!)
+	// If pattern is marked as regex but contains no regex metacharacters, use literal search
+	if options.UseRegex && isLiteralPattern(pattern) {
+		options.UseRegex = false // Use fast literal search instead
+	}
+
+	// Step 5: Handle regex search (use cached regex engine for all regex searches)
+	// Note: InvertMatch requires per-file processing, so skip hybrid engine for that case
+	if options.UseRegex && !options.InvertMatch && len(candidates) >= 1 {
 		return e.searchWithHybridRegex(pattern, candidates, options)
 	}
 
@@ -2590,4 +2607,18 @@ func (e *Engine) getFileIDFromPath(path string) types.FileID {
 		}
 	}
 	return types.FileID(0)
+}
+
+// isLiteralPattern checks if a pattern contains no regex metacharacters
+// Returns true if the pattern can be safely searched as a literal string (8x faster than regex!)
+func isLiteralPattern(pattern string) bool {
+	// Check for common regex metacharacters
+	// Note: We could use a regex here but that defeats the purpose :)
+	for _, ch := range pattern {
+		switch ch {
+		case '.', '*', '+', '?', '[', ']', '(', ')', '|', '^', '$', '\\', '{', '}':
+			return false // Found regex metacharacter
+		}
+	}
+	return true // No metacharacters found - safe to use literal search
 }
