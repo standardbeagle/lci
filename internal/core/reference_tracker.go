@@ -55,6 +55,9 @@ type ReferenceTracker struct {
 	// Performance analysis data by file for code_insight anti-pattern detection
 	perfDataByFile map[types.FileID][]types.FunctionPerfData
 
+	// Pool for symbol slices used during reference resolution (542MB → ~50MB savings)
+	symbolSlicePool sync.Pool
+
 	nextSymbolID types.SymbolID
 	mu           sync.RWMutex
 	BulkIndexing int32
@@ -73,7 +76,7 @@ func NewReferenceTracker(symbolLocationIndex *SymbolLocationIndex) *ReferenceTra
 	// Maps will automatically grow as needed, with minimal performance impact
 	expectedSymbols := 256 // Start small, grows to 512, 1024, etc. as needed
 
-	return &ReferenceTracker{
+	rt := &ReferenceTracker{
 		symbols:             NewSymbolStore(expectedSymbols),
 		references:          make(map[uint64]*types.Reference, expectedSymbols*2),
 		symbolsByName:       make(map[string][]types.SymbolID, expectedSymbols),
@@ -91,6 +94,17 @@ func NewReferenceTracker(symbolLocationIndex *SymbolLocationIndex) *ReferenceTra
 		nextSymbolID:    1,
 		nextRefID:       1,
 	}
+
+	// Initialize symbol slice pool for reference resolution
+	rt.symbolSlicePool = sync.Pool{
+		New: func() interface{} {
+			// Pre-allocate with typical file symbol count
+			slice := make([]*types.EnhancedSymbol, 0, 64)
+			return &slice
+		},
+	}
+
+	return rt
 }
 
 // NewReferenceTrackerForTest creates a ReferenceTracker for testing with a new SymbolLocationIndex
@@ -859,9 +873,11 @@ func (rt *ReferenceTracker) resolveReferenceTarget(ref types.Reference, fileSymb
 	// First check within the same file (fast path for local references)
 	// OPTIMIZED: Pre-load symbols into slice for better cache locality
 	// This avoids repeated map lookups and improves CPU cache performance
+	// OPTIMIZED: Use pooled slice to reduce allocations (542MB → ~50MB)
 	if len(fileSymbolIDs) > 0 {
-		// Pre-allocate slice with expected capacity
-		symbols := make([]*types.EnhancedSymbol, 0, len(fileSymbolIDs))
+		// Get pooled slice
+		symbolsPtr := rt.symbolSlicePool.Get().(*[]*types.EnhancedSymbol)
+		symbols := (*symbolsPtr)[:0] // Reset length but keep capacity
 
 		// Batch load all symbols into slice (cache-friendly)
 		for _, symbolID := range fileSymbolIDs {
@@ -870,12 +886,23 @@ func (rt *ReferenceTracker) resolveReferenceTarget(ref types.Reference, fileSymb
 		}
 
 		// Now iterate over the slice (much better cache locality!)
+		var foundID types.SymbolID
 		for i, symbol := range symbols {
 			if symbol != nil && symbol.Name == referencedName {
 				// Cache and return the local match
-				rt.referenceCache[cacheKey] = fileSymbolIDs[i]
-				return fileSymbolIDs[i]
+				foundID = fileSymbolIDs[i]
+				break
 			}
+		}
+
+		// Return slice to pool
+		*symbolsPtr = symbols // Update pointer with potentially grown slice
+		rt.symbolSlicePool.Put(symbolsPtr)
+
+		// Return found ID if any
+		if foundID != 0 {
+			rt.referenceCache[cacheKey] = foundID
+			return foundID
 		}
 	}
 

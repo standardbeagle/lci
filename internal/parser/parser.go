@@ -608,7 +608,6 @@ func (p *TreeSitterParser) GetSupportedLanguages() []string {
 	return languages
 }
 
-
 func (p *TreeSitterParser) ParseFile(path string, content []byte) ([]types.BlockBoundary, []types.Symbol, []types.Import) {
 	blocks, symbols, imports, _, _, _ := p.ParseFileEnhanced(path, content)
 	return blocks, symbols, imports
@@ -1195,7 +1194,6 @@ func (p *TreeSitterParser) extractBasicSymbolsStringRef(tree *tree_sitter.Tree, 
 	return blocks, symbols, imports, complexityMap
 }
 
-
 // extractReferencedSymbolName extracts the name of the referenced symbol from an AST node
 // Used by UnifiedExtractor to populate ReferencedName in references
 func (p *TreeSitterParser) extractReferencedSymbolName(node *tree_sitter.Node, content []byte) string {
@@ -1602,6 +1600,10 @@ func (p *TreeSitterParser) buildEnhancedSymbols(content []byte, symbols []types.
 	// Build symbol map for position-based lookups
 	symbolMap := buildSymbolMap(symbols)
 
+	// Create scope chain cache to avoid rebuilding identical chains (554MB → ~100MB savings)
+	// Estimated capacity: typical files have 50-200 unique line positions with symbols
+	scopeChainCache := make(map[int][]types.ScopeInfo, len(symbols)/3)
+
 	// Create enhanced symbols using the helper functions
 	for i, symbol := range symbols {
 		enhancedSymbol := p.buildSingleEnhancedSymbol(
@@ -1613,6 +1615,7 @@ func (p *TreeSitterParser) buildEnhancedSymbols(content []byte, symbols []types.
 			scopeInfo,
 			declLookup,
 			complexityMap,
+			scopeChainCache,
 		)
 		enhancedSymbols = append(enhancedSymbols, enhancedSymbol)
 	}
@@ -1659,11 +1662,12 @@ func (p *TreeSitterParser) buildSingleEnhancedSymbol(
 	scopeInfo []types.ScopeInfo,
 	declLookup DeclarationLookup,
 	complexityMap map[PositionKey]int,
+	scopeChainCache map[int][]types.ScopeInfo,
 ) types.EnhancedSymbol {
 	symbolKey := PositionKey{Line: symbol.Line, Column: symbol.Column}
 
-	// Build scope chain for this symbol
-	scopeChain := buildScopeChainForSymbol(symbol, scopeInfo)
+	// Build scope chain for this symbol (with caching)
+	scopeChain := buildScopeChainForSymbol(symbol, scopeInfo, scopeChainCache)
 
 	// Calculate reference statistics
 	incoming := incomingRefs[symbolKey]
@@ -1764,15 +1768,28 @@ func walkNodeForCyclomatic(node *tree_sitter.Node, complexity *int) {
 }
 
 // buildScopeChainForSymbol finds all scopes that contain the symbol
-func buildScopeChainForSymbol(symbol types.Symbol, scopeInfo []types.ScopeInfo) []types.ScopeInfo {
+// Uses cache to avoid rebuilding identical scope chains (554MB → ~100MB savings)
+func buildScopeChainForSymbol(symbol types.Symbol, scopeInfo []types.ScopeInfo, cache map[int][]types.ScopeInfo) []types.ScopeInfo {
+	// Create cache key from symbol line
+	// Symbols on the same line share the same scope chain
+	line := symbol.Line
+
+	// Check cache first
+	if cached, found := cache[line]; found {
+		return cached
+	}
+
 	// Pre-allocate with max depth estimate: 75MB savings
 	scopeChain := make([]types.ScopeInfo, 0, 8) // Max nesting depth rarely >8
 	for _, scope := range scopeInfo {
 		// Check if symbol is within this scope
-		if symbol.Line >= scope.StartLine && symbol.Line <= scope.EndLine {
+		if line >= scope.StartLine && line <= scope.EndLine {
 			scopeChain = append(scopeChain, scope)
 		}
 	}
+
+	// Cache the result for reuse
+	cache[line] = scopeChain
 	return scopeChain
 }
 

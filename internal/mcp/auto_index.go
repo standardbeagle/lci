@@ -44,8 +44,8 @@ func NewAutoIndexingManager(server *Server) *AutoIndexingManager {
 		fileService: core.NewFileService(),
 		status:      "idle",
 		progress:    0.0,
-		statusChan:  make(chan string, 10), // Buffered channel for status updates
-		doneChan:    make(chan struct{}),   // Completion notification
+		statusChan:  make(chan string, 10),  // Buffered channel for status updates
+		doneChan:    make(chan struct{}, 1), // Buffered to prevent dropped completion signals
 	}
 }
 
