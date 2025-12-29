@@ -93,4 +93,10 @@ var SourceFileExtensions = map[string]bool{
 	".vue": true, ".svelte": true,
 	// Dart
 	".dart": true,
+	// Configuration files (needed for grep compatibility)
+	".json": true, ".toml": true, ".yaml": true, ".yml": true,
+	".mod": true, // Go modules
+	".xml": true, ".ini": true, ".conf": true, ".config": true,
+	".lock": true, // Package lock files
+	".md": true, ".txt": true, // Documentation
 }
