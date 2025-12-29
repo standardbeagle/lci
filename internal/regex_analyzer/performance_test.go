@@ -9,7 +9,6 @@ import (
 	"github.com/standardbeagle/lci/internal/types"
 )
 
-
 // Performance comparison test between hybrid regex engine and direct regex
 func TestHybridRegexPerformanceComparison(t *testing.T) {
 	// Create test data with multiple files
@@ -49,7 +48,7 @@ func TestHybridRegexPerformanceComparison(t *testing.T) {
 			}
 
 			// Warm up both systems
-			engine.SearchWithRegex(tc.pattern, []byte{}, false, contentProvider, allFileIDs)
+			engine.SearchWithRegex(tc.pattern, false, contentProvider, allFileIDs)
 			directRegex := regexp.MustCompile(tc.pattern)
 			for _, file := range testData {
 				directRegex.FindAllIndex(file.Content, -1)
@@ -59,7 +58,7 @@ func TestHybridRegexPerformanceComparison(t *testing.T) {
 			start := time.Now()
 			hybridMatches := 0
 			for i := 0; i < 100; i++ {
-				matches, _ := engine.SearchWithRegex(tc.pattern, []byte{}, false, contentProvider, allFileIDs)
+				matches, _ := engine.SearchWithRegex(tc.pattern, false, contentProvider, allFileIDs)
 				hybridMatches += len(matches)
 			}
 			hybridTime := time.Since(start)
@@ -119,12 +118,12 @@ func TestHybridRegexCachePerformance(t *testing.T) {
 
 	// First run (cache miss)
 	start := time.Now()
-	matches1, result1 := engine.SearchWithRegex(pattern, []byte{}, false, contentProvider, allFileIDs)
+	matches1, result1 := engine.SearchWithRegex(pattern, false, contentProvider, allFileIDs)
 	firstRun := time.Since(start)
 
 	// Second run (cache hit)
 	start = time.Now()
-	matches2, result2 := engine.SearchWithRegex(pattern, []byte{}, false, contentProvider, allFileIDs)
+	matches2, result2 := engine.SearchWithRegex(pattern, false, contentProvider, allFileIDs)
 	secondRun := time.Since(start)
 
 	// Verify cache behavior
@@ -179,20 +178,20 @@ func TestHybridRegexCandidateFiltering(t *testing.T) {
 	allFileIDs := []types.FileID{1, 2, 3, 4, 5}
 
 	testCases := []struct {
-		pattern             string
-		expectedCandidates  int // Number of files that should be filtered
-		expectedMatches     int // Number of files that should actually match
+		pattern            string
+		expectedCandidates int // Number of files that should be filtered
+		expectedMatches    int // Number of files that should actually match
 	}{
-		{"func", 1, 1},      // Only file1 contains "func"
-		{"class", 1, 1},     // Only file2 contains "class"
-		{"let", 1, 1},       // Only file4 contains "let"
-		{"error", 1, 1},     // Only file5 contains "error"
-		{"struct", 1, 1},    // Only file3 contains "struct"
+		{"func", 1, 1},   // Only file1 contains "func"
+		{"class", 1, 1},  // Only file2 contains "class"
+		{"let", 1, 1},    // Only file4 contains "let"
+		{"error", 1, 1},  // Only file5 contains "error"
+		{"struct", 1, 1}, // Only file3 contains "struct"
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.pattern, func(t *testing.T) {
-			_, result := engine.SearchWithRegex(tc.pattern, []byte{}, false, contentProvider, allFileIDs)
+			_, result := engine.SearchWithRegex(tc.pattern, false, contentProvider, allFileIDs)
 
 			t.Logf("Pattern: %s", tc.pattern)
 			t.Logf("  Total candidates: %d", result.CandidatesTotal)
@@ -317,7 +316,7 @@ func BenchmarkHybridRegexVsDirect(b *testing.B) {
 	for _, pattern := range patterns {
 		b.Run("Hybrid_"+pattern, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				engine.SearchWithRegex(pattern, []byte{}, false, contentProvider, allFileIDs)
+				engine.SearchWithRegex(pattern, false, contentProvider, allFileIDs)
 			}
 		})
 

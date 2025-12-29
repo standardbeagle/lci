@@ -31,7 +31,7 @@ func processData() error {
 	}
 
 	// Test simple pattern search
-	matches, result := engine.SearchWithRegex("func", content, false, contentProvider, []types.FileID{1})
+	matches, result := engine.SearchWithRegex("func", false, contentProvider, []types.FileID{1})
 
 	if result.ExecutionPath != PathSimpleTrigramFiltered {
 		t.Errorf("Expected PathSimpleTrigramFiltered, got %v", result.ExecutionPath)
@@ -61,14 +61,14 @@ func TestHybridRegexEngineCaching(t *testing.T) {
 	}
 
 	// First search (cache miss)
-	matches1, result1 := engine.SearchWithRegex("func", content, false, contentProvider, []types.FileID{1})
+	matches1, result1 := engine.SearchWithRegex("func", false, contentProvider, []types.FileID{1})
 
 	if result1.CacheHit {
 		t.Errorf("First search should be cache miss, got hit")
 	}
 
 	// Second search (cache hit)
-	matches2, result2 := engine.SearchWithRegex("func", content, false, contentProvider, []types.FileID{1})
+	matches2, result2 := engine.SearchWithRegex("func", false, contentProvider, []types.FileID{1})
 
 	if !result2.CacheHit {
 		t.Errorf("Second search should be cache hit, got miss")
@@ -110,7 +110,7 @@ class AnotherClass { void anotherMethod() {} }
 	}
 
 	// Test pattern with multiple literals that will match on same line
-	matches, result := engine.SearchWithRegex("class.*method", content, false, contentProvider, []types.FileID{1})
+	matches, result := engine.SearchWithRegex("class.*method", false, contentProvider, []types.FileID{1})
 
 	t.Logf("ExecutionPath: %v, CandidatesFiltered: %d, Matches: %d",
 		result.ExecutionPath, result.CandidatesFiltered, len(matches))
@@ -147,7 +147,7 @@ func TestHybridRegexEngineComplexPatterns(t *testing.T) {
 	}
 
 	// Test complex pattern with backreference (should be classified as complex)
-	_, result := engine.SearchWithRegex("(\\w+)\\s+\\1", content, false, contentProvider, []types.FileID{1})
+	_, result := engine.SearchWithRegex("(\\w+)\\s+\\1", false, contentProvider, []types.FileID{1})
 
 	// Note: Go's regex doesn't support backreferences, so this will likely be handled gracefully
 	if result.ExecutionPath != PathError {
@@ -155,7 +155,7 @@ func TestHybridRegexEngineComplexPatterns(t *testing.T) {
 	}
 
 	// Test another complex pattern that Go can handle
-	matches2, result2 := engine.SearchWithRegex("func.*\\{", content, false, contentProvider, []types.FileID{1})
+	matches2, result2 := engine.SearchWithRegex("func.*\\{", false, contentProvider, []types.FileID{1})
 
 	t.Logf("Complex pattern - ExecutionPath: %v, Matches: %d", result2.ExecutionPath, len(matches2))
 	if len(matches2) == 0 {
@@ -181,14 +181,14 @@ func TestHybridRegexEngineCaseInsensitive(t *testing.T) {
 	}
 
 	// Test case-insensitive search
-	matches, _ := engine.SearchWithRegex("func", content, true, contentProvider, []types.FileID{1})
+	matches, _ := engine.SearchWithRegex("func", true, contentProvider, []types.FileID{1})
 
 	if len(matches) == 0 {
 		t.Errorf("Expected matches for case-insensitive 'func', got none")
 	}
 
 	// Test case-sensitive search (should not match)
-	matches2, _ := engine.SearchWithRegex("func", content, false, contentProvider, []types.FileID{1})
+	matches2, _ := engine.SearchWithRegex("func", false, contentProvider, []types.FileID{1})
 
 	if len(matches2) > 0 {
 		t.Errorf("Expected no matches for case-sensitive 'func' in uppercase content, got %d", len(matches2))
@@ -215,7 +215,7 @@ func TestHybridRegexEnginePerformanceMetrics(t *testing.T) {
 	// Perform multiple searches to test metrics
 	patterns := []string{"func", "class", "method", "test"}
 	for _, pattern := range patterns {
-		matches, result := engine.SearchWithRegex(pattern, content, false, contentProvider, []types.FileID{1})
+		matches, result := engine.SearchWithRegex(pattern, false, contentProvider, []types.FileID{1})
 
 		if result.MatchesFound != len(matches) {
 			t.Errorf("MatchesFound %d doesn't match actual matches %d", result.MatchesFound, len(matches))
@@ -252,7 +252,7 @@ func TestHybridRegexEngineMultipleCandidates(t *testing.T) {
 	allFileIDs := []types.FileID{1, 2, 3}
 
 	// Search for "func" - should only match file1
-	matches, result := engine.SearchWithRegex("func", []byte{}, false, contentProvider, allFileIDs)
+	matches, result := engine.SearchWithRegex("func", false, contentProvider, allFileIDs)
 
 	if len(matches) == 0 {
 		t.Errorf("Expected matches for 'func', got none")
@@ -297,7 +297,7 @@ func TestHybridRegexEngineCacheEviction(t *testing.T) {
 	// Fill cache beyond capacity
 	patterns := []string{"pattern1", "pattern2", "pattern3", "pattern4"}
 	for _, pattern := range patterns {
-		engine.SearchWithRegex(pattern, content, false, contentProvider, []types.FileID{1})
+		engine.SearchWithRegex(pattern, false, contentProvider, []types.FileID{1})
 	}
 
 	// Check cache size
@@ -353,7 +353,7 @@ class MyClass {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		pattern := patterns[i%len(patterns)]
-		engine.SearchWithRegex(pattern, content, false, contentProvider, []types.FileID{1})
+		engine.SearchWithRegex(pattern, false, contentProvider, []types.FileID{1})
 	}
 }
 
@@ -379,7 +379,7 @@ func BenchmarkHybridRegexEngineVsDirect(b *testing.B) {
 
 	b.Run("HybridEngine", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			engine.SearchWithRegex("func", content, false, contentProvider, []types.FileID{1})
+			engine.SearchWithRegex("func", false, contentProvider, []types.FileID{1})
 		}
 	})
 
@@ -423,7 +423,7 @@ type Handler struct {
 
 	t.Run("caret_matches_line_start", func(t *testing.T) {
 		// ^type should match "type" at the start of lines 5 and 13
-		matches, _ := engine.SearchWithRegex("^type", content, false, contentProvider, []types.FileID{1})
+		matches, _ := engine.SearchWithRegex("^type", false, contentProvider, []types.FileID{1})
 
 		if len(matches) != 2 {
 			t.Errorf("Expected 2 matches for ^type (lines 5 and 13), got %d", len(matches))
@@ -435,7 +435,7 @@ type Handler struct {
 
 	t.Run("caret_with_pattern_matches_line_start", func(t *testing.T) {
 		// ^func should match "func" at the start of line 9
-		matches, _ := engine.SearchWithRegex("^func", content, false, contentProvider, []types.FileID{1})
+		matches, _ := engine.SearchWithRegex("^func", false, contentProvider, []types.FileID{1})
 
 		if len(matches) != 1 {
 			t.Errorf("Expected 1 match for ^func, got %d", len(matches))
@@ -444,7 +444,7 @@ type Handler struct {
 
 	t.Run("caret_no_false_positives", func(t *testing.T) {
 		// ^Name should NOT match because "Name" is indented (tab/space before it)
-		matches, _ := engine.SearchWithRegex("^Name", content, false, contentProvider, []types.FileID{1})
+		matches, _ := engine.SearchWithRegex("^Name", false, contentProvider, []types.FileID{1})
 
 		if len(matches) != 0 {
 			t.Errorf("Expected 0 matches for ^Name (it's indented), got %d", len(matches))
@@ -453,7 +453,7 @@ type Handler struct {
 
 	t.Run("dollar_matches_line_end", func(t *testing.T) {
 		// }$ should match closing braces at end of lines
-		matches, _ := engine.SearchWithRegex("}$", content, false, contentProvider, []types.FileID{1})
+		matches, _ := engine.SearchWithRegex("}$", false, contentProvider, []types.FileID{1})
 
 		// Should match: line 7 "}", line 11 "}", line 15 "}" (struct/func closing braces)
 		if len(matches) < 3 {
@@ -463,7 +463,7 @@ type Handler struct {
 
 	t.Run("complex_anchor_pattern", func(t *testing.T) {
 		// ^type [A-Z] should match type declarations starting at line beginning
-		matches, _ := engine.SearchWithRegex("^type [A-Z]", content, false, contentProvider, []types.FileID{1})
+		matches, _ := engine.SearchWithRegex("^type [A-Z]", false, contentProvider, []types.FileID{1})
 
 		if len(matches) != 2 {
 			t.Errorf("Expected 2 matches for ^type [A-Z], got %d", len(matches))

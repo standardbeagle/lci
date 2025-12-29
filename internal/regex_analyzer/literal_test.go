@@ -13,52 +13,52 @@ func TestLiteralExtraction(t *testing.T) {
 	testCases := []struct {
 		pattern      string
 		expectedLits []string
-		description   string
+		description  string
 	}{
 		{
 			pattern:      "Function[0-9]+",
 			expectedLits: []string{"Function"},
-			description:   "Regex with character class should extract literal prefix",
+			description:  "Regex with character class should extract literal prefix",
 		},
 		{
 			pattern:      "test.*[0-9]+",
 			expectedLits: []string{"test"},
-			description:   "Regex with wildcard should extract literal part",
+			description:  "Regex with wildcard should extract literal part",
 		},
 		{
 			pattern:      "(Function|Method)[0-9]+",
 			expectedLits: []string{"Function", "Method"},
-			description:   "Alternation should extract both alternatives",
+			description:  "Alternation should extract both alternatives",
 		},
 		{
 			pattern:      "[0-9]+",
 			expectedLits: []string{},
-			description:   "Only character class should extract no literals",
+			description:  "Only character class should extract no literals",
 		},
 		{
 			pattern:      "a.*b.*c",
 			expectedLits: []string{},
-			description:   "Single character literals too short for trigrams",
+			description:  "Single character literals too short for trigrams",
 		},
 		{
 			pattern:      "abc.*def",
 			expectedLits: []string{"abc", "def"},
-			description:   "Multiple 3+ char literals should be extracted",
+			description:  "Multiple 3+ char literals should be extracted",
 		},
 		{
 			pattern:      "CreateUser.*[a-zA-Z]+",
 			expectedLits: []string{"CreateUser"},
-			description:   "Should extract CreateUser literal",
+			description:  "Should extract CreateUser literal",
 		},
 		{
 			pattern:      "(class|function).*test",
 			expectedLits: []string{"class", "function", "test"},
-			description:   "Should extract all three literals",
+			description:  "Should extract all three literals",
 		},
 		{
 			pattern:      "get.*[a-zA-Z]+ById",
 			expectedLits: []string{"get", "ById"},
-			description:   "Should extract get and ById literals",
+			description:  "Should extract get and ById literals",
 		},
 	}
 

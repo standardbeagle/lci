@@ -286,6 +286,11 @@ func main() {
 						Aliases: []string{"v"},
 						Usage:   "Show debug information",
 					},
+					&cli.BoolFlag{
+						Name:    "regex",
+						Aliases: []string{"R"},
+						Usage:   "Interpret pattern as extended regex (supports ^, $, *, +, ?, [], (), |)",
+					},
 				},
 				Action: grepCommand,
 			},
@@ -1017,7 +1022,6 @@ func concurrentDetailedSearch(pattern string, options types.SearchOptions) ([]se
 	return detailedResults, nil
 }
 
-
 func grepCommand(c *cli.Context) error {
 	if c.NArg() < 1 {
 		return errors.New("usage: lci grep <pattern>")
@@ -1032,12 +1036,14 @@ func grepCommand(c *cli.Context) error {
 	excludeTests := c.Bool("exclude-tests")
 	excludeComments := c.Bool("exclude-comments")
 	verbose := c.Bool("verbose")
+	useRegex := c.Bool("regex")
 
 	start := time.Now()
 
 	// Use basic search with grep-optimized options (no semantic analysis)
 	searchOptions := types.SearchOptions{
 		CaseInsensitive:    caseInsensitive,
+		UseRegex:           useRegex,
 		MaxResults:         maxResults, // Pass through max results limit
 		MaxContextLines:    contextLines,
 		ExcludePattern:     excludePattern,
@@ -1786,7 +1792,6 @@ func isParentMCPClient() bool {
 
 	return false
 }
-
 
 // gitAnalyzeCommand handles the git-analyze CLI command
 func gitAnalyzeCommand(c *cli.Context) error {

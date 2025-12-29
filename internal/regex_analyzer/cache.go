@@ -38,8 +38,8 @@ type RegexCache struct {
 	mu sync.RWMutex
 
 	// Configuration
-	maxSimpleSize   int
-	maxComplexSize  int
+	maxSimpleSize    int
+	maxComplexSize   int
 	maxPatternLength int
 
 	// Statistics
@@ -48,24 +48,24 @@ type RegexCache struct {
 
 // CacheStats tracks cache performance statistics
 type CacheStats struct {
-	SimpleHits      int64
-	SimpleMisses    int64
-	ComplexHits     int64
-	ComplexMisses   int64
-	SimpleEvictions int64
+	SimpleHits       int64
+	SimpleMisses     int64
+	ComplexHits      int64
+	ComplexMisses    int64
+	SimpleEvictions  int64
 	ComplexEvictions int64
-	TotalRequests   int64
+	TotalRequests    int64
 }
 
 // NewRegexCache creates a new regex cache with specified sizes
 func NewRegexCache(maxSimpleSize, maxComplexSize int) *RegexCache {
 	return &RegexCache{
-		simpleCache:    make(map[string]*SimpleRegexPattern),
-		complexCache:   make(map[string]*regexp.Regexp),
-		simpleLRU:      list.New(),
-		complexLRU:     list.New(),
-		maxSimpleSize:  maxSimpleSize,
-		maxComplexSize: maxComplexSize,
+		simpleCache:      make(map[string]*SimpleRegexPattern),
+		complexCache:     make(map[string]*regexp.Regexp),
+		simpleLRU:        list.New(),
+		complexLRU:       list.New(),
+		maxSimpleSize:    maxSimpleSize,
+		maxComplexSize:   maxComplexSize,
 		maxPatternLength: 1000, // Maximum pattern length to cache
 	}
 }

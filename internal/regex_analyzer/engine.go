@@ -66,7 +66,6 @@ const (
 // SearchWithRegex performs regex search with trigram optimization
 func (hre *HybridRegexEngine) SearchWithRegex(
 	pattern string,
-	content []byte,
 	caseInsensitive bool,
 	getFileContent func(types.FileID) ([]byte, bool),
 	candidateFiles []types.FileID,
@@ -113,14 +112,14 @@ func (hre *HybridRegexEngine) SearchWithRegex(
 
 	if simplePattern != nil {
 		matches, result.ExecutionPath = hre.executeSimplePattern(
-			simplePattern, content, candidateFiles, getFileContent, result)
+			simplePattern, candidateFiles, getFileContent, result)
 	} else if complexRegex != nil {
 		matches, result.ExecutionPath = hre.executeComplexPattern(
-			complexRegex, content, candidateFiles, getFileContent, result)
+			complexRegex, candidateFiles, getFileContent, result)
 	} else {
-		// Fallback to literal search if compilation failed
+		// Regex compilation failed - return empty result
 		result.ExecutionPath = PathError
-		matches = hre.fallbackToLiteralSearch(pattern, content)
+		matches = nil
 	}
 
 	result.TotalTime = time.Since(startTime)
@@ -167,7 +166,6 @@ func (hre *HybridRegexEngine) compileComplexPattern(pattern string, caseInsensit
 // executeSimplePattern executes a simple pattern with trigram filtering
 func (hre *HybridRegexEngine) executeSimplePattern(
 	pattern *SimpleRegexPattern,
-	content []byte,
 	candidateFiles []types.FileID,
 	getFileContent func(types.FileID) ([]byte, bool),
 	result *RegexExecutionResult,
@@ -196,7 +194,7 @@ func (hre *HybridRegexEngine) executeSimplePattern(
 	// Execute regex search on filtered candidates
 	searchStart := time.Now()
 	matches, _ := hre.executeRegexOnCandidates(
-		pattern.Compiled, filteredCandidates, getFileContent, content)
+		pattern.Compiled, filteredCandidates, getFileContent)
 	result.SearchTime = time.Since(searchStart)
 	result.FilterTime += filterTime
 
@@ -206,7 +204,6 @@ func (hre *HybridRegexEngine) executeSimplePattern(
 // executeComplexPattern executes a complex pattern without trigram filtering
 func (hre *HybridRegexEngine) executeComplexPattern(
 	regex *regexp.Regexp,
-	content []byte,
 	candidateFiles []types.FileID,
 	getFileContent func(types.FileID) ([]byte, bool),
 	result *RegexExecutionResult,
@@ -217,7 +214,7 @@ func (hre *HybridRegexEngine) executeComplexPattern(
 	result.ExecutionPath = PathComplexDirect
 
 	searchStart := time.Now()
-	matches, _ := hre.executeRegexOnCandidates(regex, candidateFiles, getFileContent, content)
+	matches, _ := hre.executeRegexOnCandidates(regex, candidateFiles, getFileContent)
 	result.SearchTime = time.Since(searchStart)
 
 	return matches, result.ExecutionPath
@@ -348,7 +345,6 @@ func (hre *HybridRegexEngine) executeRegexOnCandidates(
 	regex *regexp.Regexp,
 	candidateFiles []types.FileID,
 	getFileContent func(types.FileID) ([]byte, bool),
-	originalContent []byte,
 ) ([]searchtypes.Match, error) {
 
 	var allMatches []searchtypes.Match
