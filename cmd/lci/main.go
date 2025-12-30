@@ -307,11 +307,6 @@ func main() {
 				Action:  referencesCommand,
 			},
 			{
-				Name:   "serve",
-				Usage:  "Start indexing server",
-				Action: serveCommand,
-			},
-			{
 				Name:    "tree",
 				Aliases: []string{"t"},
 				Usage:   "Display function call hierarchy tree with architectural annotations",
@@ -640,6 +635,43 @@ Examples:
 					},
 				},
 				Action: gitAnalyzeCommand,
+			},
+			{
+				Name:    "server",
+				Usage:   "Start persistent index server (shared between CLI and MCP)",
+				Aliases: []string{"srv"},
+				Description: `Start a persistent index server that keeps the index resident in memory.
+Both CLI and MCP can connect to this server for faster query responses.
+
+The server runs until explicitly shut down with 'lci shutdown'.`,
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:    "daemon",
+						Aliases: []string{"d"},
+						Usage:   "Run as daemon (background process)",
+					},
+					&cli.BoolFlag{
+						Name:  "foreground",
+						Usage: "Run in foreground (for debugging)",
+						Value: true,
+					},
+				},
+				Action: serverCommand,
+			},
+			{
+				Name:    "shutdown",
+				Usage:   "Shutdown the persistent index server",
+				Aliases: []string{"stop"},
+				Description: `Gracefully shutdown the running index server.
+This will free all memory and close the socket.`,
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:    "force",
+						Aliases: []string{"f"},
+						Usage:   "Force shutdown even if operations are in progress",
+					},
+				},
+				Action: shutdownCommand,
 			},
 		},
 		Before: func(c *cli.Context) error {
@@ -1055,17 +1087,25 @@ func grepCommand(c *cli.Context) error {
 		EnsureCompleteStmt: false, // No statement completion for speed
 	}
 
-	results, err := concurrentSearch(pattern, searchOptions)
+	// Load configuration
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Ensure server is running (auto-start if needed)
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
+	// Perform search using the server
+	results, err := client.Search(pattern, searchOptions, maxResults)
 	if err != nil {
 		return fmt.Errorf("grep search failed: %w", err)
 	}
 
 	elapsed := time.Since(start)
-
-	// Apply maxResults limit
-	if len(results) > maxResults {
-		results = results[:maxResults]
-	}
 
 	// Display results in grep-like format
 	return displayGrepResults(c, pattern, results, elapsed)
@@ -1113,25 +1153,6 @@ func referencesCommand(c *cli.Context) error {
 	}
 
 	return nil
-}
-
-func serveCommand(c *cli.Context) error {
-	// Get the config to pass to MCP server
-	cfg, err := config.Load(c.String("config"))
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Use the existing indexer (MasterIndex) with the MCP server
-	server, err := mcp.NewServer(indexer, cfg)
-	if err != nil {
-		return fmt.Errorf("failed to create MCP server: %w", err)
-	}
-
-	// Log to stderr, not stdout - MCP requires clean stdio
-	fmt.Fprintf(os.Stderr, "LCI MCP server starting with MasterIndex...\n")
-	ctx := context.Background()
-	return server.Start(ctx)
 }
 
 // determineFormat determines the output format based on CLI flags
@@ -1248,6 +1269,17 @@ func mcpCommand(c *cli.Context) error {
 		return debug.Fatal("failed to load config: %v\n", err)
 	}
 
+	// Start the shared index server in-process so CLI commands can connect to it
+	// This allows the MCP and CLI to share the same index via RPC
+	indexServer, err := startSharedIndexServer(cfg, indexer)
+	if err != nil {
+		debug.LogMCP("Warning: Failed to start shared index server: %v\n", err)
+		debug.LogMCP("MCP will continue, but CLI commands won't be able to connect\n")
+		// Continue anyway - MCP can still work without the RPC server
+	} else {
+		debug.LogMCP("Shared index server started, CLI commands can connect\n")
+	}
+
 	// Create and start MCP server with new architecture
 	mcpServer, err := mcp.NewServer(indexer, cfg)
 	if err != nil {
@@ -1273,7 +1305,19 @@ func mcpCommand(c *cli.Context) error {
 	select {
 	case err := <-errChan:
 		if err != nil {
+			// Shutdown index server before returning error
+			if indexServer != nil {
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer shutdownCancel()
+				indexServer.Shutdown(shutdownCtx)
+			}
 			return debug.Fatal("MCP server error: %v\n", err)
+		}
+		// Shutdown index server on normal exit
+		if indexServer != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			indexServer.Shutdown(shutdownCtx)
 		}
 		return nil
 	case sig := <-sigChan:
@@ -1287,6 +1331,12 @@ func mcpCommand(c *cli.Context) error {
 		select {
 		case err := <-errChan:
 			debug.LogMCP("Server shutdown completed\n")
+			// Shutdown index server
+			if indexServer != nil {
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer shutdownCancel()
+				indexServer.Shutdown(shutdownCtx)
+			}
 			return err
 		case <-shutdownTimer.C:
 			debug.LogMCP("Graceful shutdown timeout, forcing exit\n")
@@ -1300,9 +1350,21 @@ func mcpCommand(c *cli.Context) error {
 			select {
 			case err := <-errChan:
 				debug.LogMCP("Server shutdown completed after stdin close\n")
+				// Shutdown index server
+				if indexServer != nil {
+					shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer shutdownCancel()
+					indexServer.Shutdown(shutdownCtx)
+				}
 				return err
 			case <-forceTimer.C:
 				debug.LogMCP("Force shutdown timeout exceeded\n")
+				// Shutdown index server
+				if indexServer != nil {
+					shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer shutdownCancel()
+					indexServer.Shutdown(shutdownCtx)
+				}
 				return nil // Exit cleanly rather than error
 			}
 		}

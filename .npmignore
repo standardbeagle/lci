@@ -1,0 +1,29 @@
+# Source files (only ship the binary)
+*.go
+go.mod
+go.sum
+internal/
+cmd/
+tests/
+testhelpers/
+testing/
+
+# Development files
+.git/
+.github/
+*.prof
+*.test
+
+# Build artifacts (except dist)
+/lci
+/lci-*
+!dist/
+
+# Documentation (except README)
+docs/
+*.md
+!README.md
+
+# Test data
+real_projects/
+workflow_testdata/

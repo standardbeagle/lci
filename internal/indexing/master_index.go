@@ -123,6 +123,13 @@ func (mi *MasterIndex) SetSearchEngine(engine *search.Engine) {
 	mi.searchEngine = engine
 }
 
+// GetSearchEngine returns the search engine for this index
+func (mi *MasterIndex) GetSearchEngine() *search.Engine {
+	mi.mu.RLock()
+	defer mi.mu.RUnlock()
+	return mi.searchEngine
+}
+
 // NewMasterIndex creates a new master index with optimal configuration
 // @lci:labels[constructor,indexing,entry-point]
 // @lci:category[indexing]
