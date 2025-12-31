@@ -51,6 +51,20 @@ type SymbolIndex struct {
 
 	// Track file count separately to avoid O(n) scan
 	fileCount int
+
+	// Optional deleted file tracker for filtering stale symbols
+	// Set via SetDeletedFileTracker() after construction
+	deletedFileTracker deletedFileTrackerInterface
+}
+
+// deletedFileTrackerInterface defines the minimal interface needed for filtering
+// This avoids circular dependencies while allowing testing with mocks
+type deletedFileTrackerInterface interface {
+	IsDeleted(types.FileID) bool
+	GetDeletedSet() interface {
+		Contains(types.FileID) bool
+		Len() int
+	}
 }
 
 func NewSymbolIndex() *SymbolIndex {
@@ -67,38 +81,150 @@ func NewSymbolIndex() *SymbolIndex {
 }
 
 // GetStats returns pre-computed symbol statistics
+// Embedded slices (EntryPoints, ExportedSymbols, TopSymbols) are filtered to exclude deleted files
 func (si *SymbolIndex) GetStats() SymbolIndexStats {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
-	return si.stats
+
+	// Fast path: no tracker
+	if si.deletedFileTracker == nil {
+		return si.stats
+	}
+
+	// Get deleted set (lock-free atomic read)
+	deletedSet := si.deletedFileTracker.GetDeletedSet()
+	if deletedSet.Len() == 0 {
+		return si.stats
+	}
+
+	// Create filtered copy
+	filtered := si.stats
+
+	// Filter EntryPoints
+	if len(si.stats.EntryPoints) > 0 {
+		filteredEntries := make([]types.Symbol, 0, len(si.stats.EntryPoints))
+		for _, sym := range si.stats.EntryPoints {
+			if !deletedSet.Contains(sym.FileID) {
+				filteredEntries = append(filteredEntries, sym)
+			}
+		}
+		filtered.EntryPoints = filteredEntries
+	}
+
+	// Filter ExportedSymbols
+	if len(si.stats.ExportedSymbols) > 0 {
+		filteredExported := make([]types.Symbol, 0, len(si.stats.ExportedSymbols))
+		for _, sym := range si.stats.ExportedSymbols {
+			if !deletedSet.Contains(sym.FileID) {
+				filteredExported = append(filteredExported, sym)
+			}
+		}
+		filtered.ExportedSymbols = filteredExported
+	}
+
+	// Filter TopSymbols
+	if len(si.stats.TopSymbols) > 0 {
+		filteredTop := make([]SymbolWithScore, 0, len(si.stats.TopSymbols))
+		for _, sws := range si.stats.TopSymbols {
+			if !deletedSet.Contains(sws.Symbol.FileID) {
+				filteredTop = append(filteredTop, sws)
+			}
+		}
+		filtered.TopSymbols = filteredTop
+	}
+
+	return filtered
 }
 
 // GetEntryPoints returns all entry point symbols (main, init, exported)
+// Results are automatically filtered to exclude symbols from deleted files
 func (si *SymbolIndex) GetEntryPoints() []types.Symbol {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
-	if len(si.stats.EntryPoints) == 0 {
+
+	// Fast path: no tracker or no entries
+	if si.deletedFileTracker == nil {
+		if len(si.stats.EntryPoints) == 0 {
+			return nil
+		}
+		entries := make([]types.Symbol, len(si.stats.EntryPoints))
+		copy(entries, si.stats.EntryPoints)
+		return entries
+	}
+
+	// Get deleted set (lock-free atomic read)
+	deletedSet := si.deletedFileTracker.GetDeletedSet()
+	if deletedSet.Len() == 0 {
+		if len(si.stats.EntryPoints) == 0 {
+			return nil
+		}
+		entries := make([]types.Symbol, len(si.stats.EntryPoints))
+		copy(entries, si.stats.EntryPoints)
+		return entries
+	}
+
+	// Filter deleted files
+	result := make([]types.Symbol, 0, len(si.stats.EntryPoints))
+	for _, sym := range si.stats.EntryPoints {
+		if !deletedSet.Contains(sym.FileID) {
+			result = append(result, sym)
+		}
+	}
+
+	if len(result) == 0 {
 		return nil
 	}
-	// Return copy to avoid race conditions
-	entries := make([]types.Symbol, len(si.stats.EntryPoints))
-	copy(entries, si.stats.EntryPoints)
-	return entries
+	return result
 }
 
 // GetTopSymbols returns most referenced symbols
+// Results are automatically filtered to exclude symbols from deleted files
 func (si *SymbolIndex) GetTopSymbols(limit int) []SymbolWithScore {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
-	if limit > len(si.stats.TopSymbols) {
-		limit = len(si.stats.TopSymbols)
+
+	// Fast path: no tracker
+	if si.deletedFileTracker == nil {
+		if limit > len(si.stats.TopSymbols) {
+			limit = len(si.stats.TopSymbols)
+		}
+		if limit == 0 {
+			return nil
+		}
+		symbols := make([]SymbolWithScore, limit)
+		copy(symbols, si.stats.TopSymbols[:limit])
+		return symbols
 	}
-	if limit == 0 {
+
+	// Get deleted set (lock-free atomic read)
+	deletedSet := si.deletedFileTracker.GetDeletedSet()
+	if deletedSet.Len() == 0 {
+		if limit > len(si.stats.TopSymbols) {
+			limit = len(si.stats.TopSymbols)
+		}
+		if limit == 0 {
+			return nil
+		}
+		symbols := make([]SymbolWithScore, limit)
+		copy(symbols, si.stats.TopSymbols[:limit])
+		return symbols
+	}
+
+	// Filter deleted files and respect limit
+	result := make([]SymbolWithScore, 0, limit)
+	for _, sws := range si.stats.TopSymbols {
+		if !deletedSet.Contains(sws.Symbol.FileID) {
+			result = append(result, sws)
+			if len(result) >= limit {
+				break
+			}
+		}
+	}
+
+	if len(result) == 0 {
 		return nil
 	}
-	symbols := make([]SymbolWithScore, limit)
-	copy(symbols, si.stats.TopSymbols[:limit])
-	return symbols
+	return result
 }
 
 // GetTypeDistribution returns histogram of symbol types
@@ -264,6 +390,11 @@ func (si *SymbolIndex) RemoveFileSymbols(fileID types.FileID) {
 	if len(removedSymbols) > 0 {
 		si.updateStatsForRemoval(fileID, removedSymbols)
 	}
+
+	// CRITICAL: Rebuild stats slices to prevent memory leak
+	// This ensures EntryPoints and ExportedSymbols don't accumulate stale entries
+	// during file watching (where FinalizeStats is only called once)
+	si.rebuildStatsSlices()
 }
 
 // containsFileID checks if a symbol list contains a symbol with the given fileID
@@ -751,4 +882,47 @@ func (si *SymbolIndex) updateStatsForRemoval(fileID types.FileID, symbols []type
 	// Note: We don't remove from EntryPoints/ExportedSymbols here
 	// as that would require scanning those slices
 	// They'll be cleaned up when FinalizeStats is called
+}
+
+// SetDeletedFileTracker sets the deleted file tracker for filtering stale symbols
+// This must be called after construction to avoid circular dependencies
+func (si *SymbolIndex) SetDeletedFileTracker(tracker deletedFileTrackerInterface) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	si.deletedFileTracker = tracker
+}
+
+// rebuildStatsSlices reconstructs EntryPoints and ExportedSymbols from current definitions
+// This prevents memory leaks during file watching by removing stale symbols
+// Call with lock held
+func (si *SymbolIndex) rebuildStatsSlices() {
+	// Clear old slices (prevents memory leak)
+	si.stats.EntryPoints = nil
+	si.stats.ExportedSymbols = nil
+
+	// Pre-allocate with reasonable capacity
+	entryPointCap := 50
+	exportedCap := len(si.definitions) / 2
+	if exportedCap < 100 {
+		exportedCap = 100
+	}
+	si.stats.EntryPoints = make([]types.Symbol, 0, entryPointCap)
+	si.stats.ExportedSymbols = make([]types.Symbol, 0, exportedCap)
+
+	// Rebuild from current definitions
+	for _, symbols := range si.definitions {
+		for _, sym := range symbols {
+			// Skip deleted files if tracker available
+			if si.deletedFileTracker != nil && si.deletedFileTracker.IsDeleted(sym.FileID) {
+				continue
+			}
+
+			if isEntryPoint(sym) {
+				si.stats.EntryPoints = append(si.stats.EntryPoints, sym)
+			}
+			if isExported(sym.Name) {
+				si.stats.ExportedSymbols = append(si.stats.ExportedSymbols, sym)
+			}
+		}
+	}
 }

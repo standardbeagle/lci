@@ -65,6 +65,17 @@ type ReferenceTracker struct {
 
 	// NEW: Pre-computed statistics
 	stats ReferenceStats
+
+	// Optional deleted file tracker for filtering stale symbols
+	// Set via SetDeletedFileTracker() after construction
+	// Uses same interface as SymbolIndex to avoid circular dependencies
+	deletedFileTracker interface {
+		IsDeleted(types.FileID) bool
+		GetDeletedSet() interface {
+			Contains(types.FileID) bool
+			Len() int
+		}
+	}
 }
 
 // NewReferenceTracker creates a new reference tracking system
@@ -144,6 +155,20 @@ func (rt *ReferenceTracker) GetReferenceStats() ReferenceStats {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 	return rt.stats
+}
+
+// SetDeletedFileTracker sets the deleted file tracker for filtering stale symbols
+// This must be called after construction to avoid circular dependencies
+func (rt *ReferenceTracker) SetDeletedFileTracker(tracker interface {
+	IsDeleted(types.FileID) bool
+	GetDeletedSet() interface {
+		Contains(types.FileID) bool
+		Len() int
+	}
+}) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.deletedFileTracker = tracker
 }
 
 // Shutdown performs graceful shutdown with resource cleanup
@@ -1080,17 +1105,38 @@ func (rt *ReferenceTracker) GetSymbolReferences(symbolID types.SymbolID, directi
 }
 
 // FindSymbolsByName finds all symbols with a given name
+// Results are automatically filtered to exclude symbols from deleted files
 func (rt *ReferenceTracker) FindSymbolsByName(name string) []*types.EnhancedSymbol {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 
-	var symbols []*types.EnhancedSymbol
-	if symbolIDs, exists := rt.symbolsByName[name]; exists {
+	symbolIDs, exists := rt.symbolsByName[name]
+	if !exists {
+		return nil
+	}
+
+	// Fast path: no filtering
+	if rt.deletedFileTracker == nil {
+		var symbols []*types.EnhancedSymbol
 		for _, symbolID := range symbolIDs {
-			// Use SymbolStore.Get for fast O(1) access
 			if symbol := rt.symbols.Get(symbolID); symbol != nil {
 				symbols = append(symbols, symbol)
 			}
+		}
+		return symbols
+	}
+
+	// Filter deleted files (get deleted set once)
+	deletedSet := rt.deletedFileTracker.GetDeletedSet()
+	var symbols []*types.EnhancedSymbol
+	for _, symbolID := range symbolIDs {
+		symbol := rt.symbols.Get(symbolID)
+		if symbol != nil {
+			// Skip symbols from deleted files
+			if deletedSet.Len() > 0 && deletedSet.Contains(symbol.FileID) {
+				continue
+			}
+			symbols = append(symbols, symbol)
 		}
 	}
 
@@ -1098,18 +1144,35 @@ func (rt *ReferenceTracker) FindSymbolsByName(name string) []*types.EnhancedSymb
 }
 
 // GetEnhancedSymbol returns an enhanced symbol by ID
+// Returns nil if the symbol is from a deleted file
 // OPTIMIZED: Uses SymbolStore.Get for O(1) array access instead of map lookup
 func (rt *ReferenceTracker) GetEnhancedSymbol(symbolID types.SymbolID) *types.EnhancedSymbol {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 
-	return rt.symbols.Get(symbolID)
+	symbol := rt.symbols.Get(symbolID)
+	if symbol == nil {
+		return nil
+	}
+
+	// Filter deleted files
+	if rt.deletedFileTracker != nil && rt.deletedFileTracker.IsDeleted(symbol.FileID) {
+		return nil
+	}
+
+	return symbol
 }
 
 // GetFileEnhancedSymbols returns all enhanced symbols for a file
+// Returns nil if the file has been deleted
 func (rt *ReferenceTracker) GetFileEnhancedSymbols(fileID types.FileID) []*types.EnhancedSymbol {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
+
+	// Check if file is deleted first (early return optimization)
+	if rt.deletedFileTracker != nil && rt.deletedFileTracker.IsDeleted(fileID) {
+		return nil
+	}
 
 	symbolIDs, exists := rt.symbolsByFile[fileID]
 	if !exists {

@@ -124,6 +124,16 @@ func (dt *DeletedFileTracker) IsDeleted(fileID types.FileID) bool {
 	return dt.deletedFiles.Load().Contains(fileID)
 }
 
+// GetDeletedSet returns the current deleted file set (lock-free atomic read)
+// This method exists to support the symbol filtering interface
+// Returns the set as an interface to avoid circular dependencies with core package
+func (dt *DeletedFileTracker) GetDeletedSet() interface {
+	Contains(types.FileID) bool
+	Len() int
+} {
+	return dt.deletedFiles.Load()
+}
+
 // FilterCandidates returns a new slice with deleted files removed.
 // This is the primary method used during search to filter out stale index entries.
 func (dt *DeletedFileTracker) FilterCandidates(candidates []types.FileID) []types.FileID {

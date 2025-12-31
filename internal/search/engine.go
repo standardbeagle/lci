@@ -1076,6 +1076,17 @@ func (e *Engine) SearchWithOptions(pattern string, candidates []types.FileID, op
 		return nil
 	}
 
+	// Step 4.1: Filter out deleted/invalidated files
+	type deletedFileFilter interface {
+		FilterDeletedFiles([]types.FileID) []types.FileID
+	}
+	if dff, ok := any(e.indexer).(deletedFileFilter); ok {
+		candidates = dff.FilterDeletedFiles(candidates)
+		if len(candidates) == 0 {
+			return nil
+		}
+	}
+
 	// Step 4.5: Optimize literal patterns (8x faster than regex!)
 	// If pattern is marked as regex but contains no regex metacharacters, use literal search
 	if options.UseRegex && isLiteralPattern(pattern) {
@@ -1372,7 +1383,6 @@ func (e *Engine) enhanceResult(
 	detailed.RelationalData = relationalContext
 	return detailed
 }
-
 
 func (e *Engine) scoreMatch(file *types.FileInfo, match Match, pattern string, line int) float64 {
 	score := 10.0

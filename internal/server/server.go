@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/standardbeagle/lci/internal/config"
+	"github.com/standardbeagle/lci/internal/debug"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/search"
 	"github.com/standardbeagle/lci/internal/version"
@@ -116,11 +116,11 @@ func (s *IndexServer) Start() error {
 			s.indexingActive = true
 			s.mu.Unlock()
 
-			log.Printf("Starting indexing of %s...", s.cfg.Project.Root)
+			debug.LogMCP("Starting indexing of %s...", s.cfg.Project.Root)
 			if err := s.indexer.IndexDirectory(context.Background(), s.cfg.Project.Root); err != nil {
-				log.Printf("Indexing error: %v", err)
+				debug.LogMCP("Indexing error: %v", err)
 			} else {
-				log.Printf("Indexing completed successfully")
+				debug.LogMCP("Indexing completed successfully")
 			}
 
 			// Create search engine after indexing completes
@@ -130,10 +130,10 @@ func (s *IndexServer) Start() error {
 			s.indexingActive = false
 			s.mu.Unlock()
 
-			log.Printf("Index ready for queries")
+			debug.LogMCP("Index ready for queries")
 		}()
 	} else {
-		log.Printf("Using externally managed index (ready immediately)")
+		debug.LogMCP("Using externally managed index (ready immediately)")
 	}
 
 	// Start serving
@@ -141,12 +141,12 @@ func (s *IndexServer) Start() error {
 	go func() {
 		defer s.wg.Done()
 		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+			debug.LogMCP("Server error: %v", err)
 		}
 	}()
 
-	log.Printf("Index server started on %s (pid: %d)", socketPath, os.Getpid())
-	log.Printf("Project root: %s", s.cfg.Project.Root)
+	debug.LogMCP("Index server started on %s (pid: %d)", socketPath, os.Getpid())
+	debug.LogMCP("Project root: %s", s.cfg.Project.Root)
 
 	return nil
 }
@@ -173,10 +173,8 @@ func (s *IndexServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	fileCount := 0
 	symbolCount := 0
 	if ready {
-		// TODO: Add methods to get these stats from MasterIndex
-		// For now, estimate from search engine
-		fileCount = -1   // Unknown
-		symbolCount = -1 // Unknown
+		fileCount = s.indexer.GetFileCount()
+		symbolCount = s.indexer.GetSymbolCount()
 	}
 
 	status := IndexStatus{
@@ -317,11 +315,11 @@ func (s *IndexServer) handleReindex(w http.ResponseWriter, r *http.Request) {
 		s.searchEngine = nil // Invalidate during reindex
 		s.mu.Unlock()
 
-		log.Printf("Re-indexing %s...", rootPath)
+		debug.LogMCP("Re-indexing %s...", rootPath)
 		if err := s.indexer.IndexDirectory(context.Background(), rootPath); err != nil {
-			log.Printf("Re-indexing error: %v", err)
+			debug.LogMCP("Re-indexing error: %v", err)
 		} else {
-			log.Printf("Re-indexing completed successfully")
+			debug.LogMCP("Re-indexing completed successfully")
 		}
 
 		// Recreate search engine
@@ -331,7 +329,7 @@ func (s *IndexServer) handleReindex(w http.ResponseWriter, r *http.Request) {
 		s.indexingActive = false
 		s.mu.Unlock()
 
-		log.Printf("Index ready after reindex")
+		debug.LogMCP("Index ready after reindex")
 	}()
 
 	response := ReindexResponse{
@@ -376,7 +374,7 @@ func (s *IndexServer) Shutdown(ctx context.Context) error {
 	// Remove socket file
 	os.Remove(GetSocketPath())
 
-	log.Printf("Index server shut down cleanly")
+	debug.LogMCP("Index server shut down cleanly")
 	runtime.GC() // Force GC to release memory
 
 	return nil

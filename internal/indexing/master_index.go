@@ -245,6 +245,10 @@ func NewMasterIndex(cfg *config.Config) *MasterIndex {
 	// Initialize deleted file tracker for filtering stale index entries
 	mi.deletedFileTracker = NewDeletedFileTracker()
 
+	// Wire up deleted file tracker to symbol components for automatic filtering
+	mi.symbolIndex.SetDeletedFileTracker(mi.deletedFileTracker)
+	mi.refTracker.SetDeletedFileTracker(mi.deletedFileTracker)
+
 	// Initialize file watcher if enabled
 	if cfg.Index.WatchMode {
 		fileWatcher, err := NewFileWatcher(cfg, mi.fileScanner)
@@ -627,16 +631,10 @@ func (mi *MasterIndex) handleFileChanged(path string, eventType FileEventType) {
 		return
 	}
 
-	// Read the file content through FileService
-	fileID, err := mi.fileService.LoadFile(path)
+	// Read the file content directly (don't use LoadFile - UpdateFile will handle FileID creation)
+	content, err := mi.fileService.ReadFile(path)
 	if err != nil {
-		debug.LogIndexing("Warning: failed to load changed file %s: %v\n", path, err)
-		return
-	}
-
-	content, ok := mi.fileService.GetFileContent(fileID)
-	if !ok {
-		debug.LogIndexing("Warning: failed to get file content for %s (FileID: %d)\n", path, fileID)
+		debug.LogIndexing("Warning: failed to read changed file %s: %v\n", path, err)
 		return
 	}
 
@@ -956,6 +954,12 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 	}
 
 	if exists {
+		// Mark old file as deleted immediately for search filtering
+		// This ensures concurrent searches won't return stale results from the old FileID
+		if mi.deletedFileTracker != nil {
+			mi.deletedFileTracker.MarkDeleted(oldFileID)
+		}
+
 		// Invalidate old file content and references BEFORE creating new FileID
 		// This prevents memory leaks by ensuring proper cleanup order
 		mi.fileContentStore.InvalidateFile(path)
@@ -988,31 +992,30 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 	oldFileIDForClosure := oldFileID
 	existsForClosure := exists
 
-	// Update file mapping with atomic copy-on-write
-	mi.updateSnapshotAtomic(func(oldSnapshot *FileSnapshot) *FileSnapshot {
-		// Create new snapshot with all existing data, excluding the old file being updated
-		// EFFICIENT UPDATE: Use the new immutable copy functions
-		newSnapshot := &FileSnapshot{
-			fileMap:        copyMapStringToFileID(oldSnapshot.fileMap),
-			reverseFileMap: copyMapFileIDToString(oldSnapshot.reverseFileMap),
-			fileScopes:     copyMapFileIDToScopeInfo(oldSnapshot.fileScopes),
-			// fileCache removed - use FileContentStore instead
-		}
+	// Update file mapping with copy-on-write (we already hold snapshotMu lock)
+	// NOTE: We already hold the snapshotMu lock from line 932, so we can't call
+	// updateSnapshotAtomic as it would try to acquire the lock again (deadlock!)
+	oldSnapshot := mi.fileSnapshot.Load()
+	newSnapshot := &FileSnapshot{
+		fileMap:        copyMapStringToFileID(oldSnapshot.fileMap),
+		reverseFileMap: copyMapFileIDToString(oldSnapshot.reverseFileMap),
+		fileScopes:     copyMapFileIDToScopeInfo(oldSnapshot.fileScopes),
+		// fileCache removed - use FileContentStore instead
+	}
 
-		// Remove old file mappings and add new ones
-		delete(newSnapshot.fileMap, path)
-		if existsForClosure {
-			delete(newSnapshot.reverseFileMap, oldFileIDForClosure)
-			delete(newSnapshot.fileScopes, oldFileIDForClosure)
-		}
+	// Remove old file mappings and add new ones
+	delete(newSnapshot.fileMap, path)
+	if existsForClosure {
+		delete(newSnapshot.reverseFileMap, oldFileIDForClosure)
+		delete(newSnapshot.fileScopes, oldFileIDForClosure)
+	}
 
-		// Add new file mappings
-		newSnapshot.fileMap[path] = fileID
-		newSnapshot.reverseFileMap[fileID] = path
-		// fileCache updates removed
+	// Add new file mappings
+	newSnapshot.fileMap[path] = fileID
+	newSnapshot.reverseFileMap[fileID] = path
+	// fileCache updates removed
 
-		return newSnapshot
-	})
+	mi.fileSnapshot.Store(newSnapshot)
 
 	// Index file path for file search
 	mi.fileSearchEngine.IndexFile(fileID, path)
