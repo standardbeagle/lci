@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+
+	"github.com/standardbeagle/lci/internal/encoding"
 )
 
 // CompositeSymbolID is a composite identifier for symbols within the codebase
@@ -29,93 +31,29 @@ func (s CompositeSymbolID) String() string {
 	return fmt.Sprintf("Symbol[F:%d,L:%d]", s.FileID, s.LocalSymbolID)
 }
 
-// valueToChar converts a base-63 value to its character representation
-func valueToChar(val uint64) byte {
-	// Use lookup table for O(1) conversion instead of nested conditionals
-	// This reduces cyclomatic complexity from 4 to 0
-	if val < 26 {
-		return byte('A' + val)
-	} else if val < 52 {
-		return byte('a' + (val - 26))
-	} else if val < 62 {
-		return byte('0' + (val - 52))
-	}
-	return '_'
-}
-
-// CompactString returns the dense encoded representation for external APIs
+// CompactString returns the dense encoded representation for external APIs.
+// Uses the consolidated encoding package for base-63 encoding.
 func (s CompositeSymbolID) CompactString() string {
-	// Use the same compact encoding as DenseObjectID
-	combined := uint64(s.FileID) | (uint64(s.LocalSymbolID) << 32)
-
-	if combined == 0 {
-		return ""
-	}
-
-	var result []byte
-	const base = 63
-
-	// Encode using base-63 (A-Za-z0-9_)
-	// Extracted loop logic for better testability
-	for combined > 0 {
-		val := combined % base
-		c := valueToChar(val)
-		result = append(result, c)
-		combined /= base
-	}
-
-	// Reverse for correct order
-	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
-		result[i], result[j] = result[j], result[i]
-	}
-
-	return string(result)
+	combined := encoding.PackUint32Pair(uint32(s.FileID), s.LocalSymbolID)
+	return encoding.Base63EncodeNoZero(combined)
 }
 
-// charToValue converts a character to its base-63 numeric value
-func charToValue(c rune) (uint64, error) {
-	// Use lookup logic instead of nested conditionals
-	// Returns value and error in single call
-	if c >= 'A' && c <= 'Z' {
-		return uint64(c - 'A'), nil
-	}
-	if c >= 'a' && c <= 'z' {
-		return uint64(c-'a') + 26, nil
-	}
-	if c >= '0' && c <= '9' {
-		return uint64(c-'0') + 52, nil
-	}
-	if c == '_' {
-		return 62, nil
-	}
-	return 0, fmt.Errorf("invalid character in compact string: %c", c)
-}
-
-// ParseCompactString decodes a compact string back to a CompositeSymbolID
+// ParseCompactString decodes a compact string back to a CompositeSymbolID.
+// Uses the consolidated encoding package for base-63 decoding.
 func ParseCompactString(compact string) (CompositeSymbolID, error) {
 	if compact == "" {
 		return CompositeSymbolID{}, errors.New("empty compact string")
 	}
 
-	var combined uint64
-	const base = 63
-
-	// Decode from base-63
-	for _, c := range compact {
-		val, err := charToValue(c)
-		if err != nil {
-			return CompositeSymbolID{}, err
-		}
-		combined = combined*base + val
+	combined, err := encoding.Base63Decode(compact)
+	if err != nil {
+		return CompositeSymbolID{}, err
 	}
 
-	// Extract FileID and LocalSymbolID
-	fileID := FileID(combined & 0xFFFFFFFF)
-	localSymbolID := uint32(combined >> 32)
-
+	lower, upper := encoding.UnpackUint32Pair(combined)
 	return CompositeSymbolID{
-		FileID:        fileID,
-		LocalSymbolID: localSymbolID,
+		FileID:        FileID(lower),
+		LocalSymbolID: upper,
 	}, nil
 }
 

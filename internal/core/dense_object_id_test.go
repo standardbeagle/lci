@@ -2,8 +2,10 @@ package core
 
 import (
 	"fmt"
-	"github.com/standardbeagle/lci/internal/types"
 	"testing"
+
+	"github.com/standardbeagle/lci/internal/encoding"
+	"github.com/standardbeagle/lci/internal/types"
 )
 
 func TestDenseObjectID_Encoding(t *testing.T) {
@@ -165,30 +167,31 @@ func TestDenseObjectID_EdgeCases(t *testing.T) {
 func TestDenseObjectID_CharacterSet(t *testing.T) {
 	// Test that our encoding covers the expected range
 	// A-Z: 0-25, a-z: 26-51, 0-9: 52-61, _: 62
+	// Tests use the consolidated encoding package
 	testCases := []struct {
 		val  uint64
 		want byte
 	}{
-		{0, 'A'}, {25, 'Z'},   // A-Z
-		{26, 'a'}, {51, 'z'},   // a-z
-		{52, '0'}, {61, '9'},   // 0-9
-		{62, '_'},              // underscore
+		{0, 'A'}, {25, 'Z'}, // A-Z
+		{26, 'a'}, {51, 'z'}, // a-z
+		{52, '0'}, {61, '9'}, // 0-9
+		{62, '_'}, // underscore
 	}
 
 	for _, tc := range testCases {
 		t.Run(fmt.Sprintf("encode_%d", tc.val), func(t *testing.T) {
-			got := encodeChar(tc.val)
+			got := encoding.Base63ValueToChar(tc.val)
 			if got != tc.want {
-				t.Errorf("encodeChar(%d) = %c, want %c", tc.val, got, tc.want)
+				t.Errorf("Base63ValueToChar(%d) = %c, want %c", tc.val, got, tc.want)
 			}
 
 			// Test round-trip
-			decoded, err := decodeChar(got)
+			decoded, err := encoding.Base63CharToValue(rune(got))
 			if err != nil {
-				t.Errorf("decodeChar(%c) error: %v", got, err)
+				t.Errorf("Base63CharToValue(%c) error: %v", got, err)
 			}
 			if decoded != tc.val {
-				t.Errorf("decodeChar(%c) = %d, want %d", got, decoded, tc.val)
+				t.Errorf("Base63CharToValue(%c) = %d, want %d", got, decoded, tc.val)
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/standardbeagle/lci/internal/searchtypes"
 )
 
 // SemanticAnnotationsParams defines parameters for semantic annotations queries
@@ -154,7 +155,7 @@ func (s *Server) handleSemanticAnnotations(ctx context.Context, req *mcp.CallToo
 				result := SemanticAnnotationResult{
 					SymbolName:   annotated.Symbol.Name,
 					FileID:       int(annotated.FileID),
-					SymbolID:     fmt.Sprintf("%d", annotated.SymbolID),
+					SymbolID:     searchtypes.EncodeSymbolID(annotated.SymbolID),
 					FilePath:     annotated.FilePath,
 					Line:         annotated.Symbol.Line,
 					DirectLabels: annotated.Annotation.Labels,
@@ -238,9 +239,10 @@ func (s *Server) handleSemanticAnnotations(ctx context.Context, req *mcp.CallToo
 			}
 
 			// Check if already in results
+			encodedSymbolID := searchtypes.EncodeSymbolID(annotated.SymbolID)
 			found := false
 			for i := range results {
-				if results[i].SymbolID == fmt.Sprintf("%d", annotated.SymbolID) {
+				if results[i].SymbolID == encodedSymbolID {
 					found = true
 					break
 				}
@@ -250,7 +252,7 @@ func (s *Server) handleSemanticAnnotations(ctx context.Context, req *mcp.CallToo
 				result := SemanticAnnotationResult{
 					SymbolName:   annotated.Symbol.Name,
 					FileID:       int(annotated.FileID),
-					SymbolID:     fmt.Sprintf("%d", annotated.SymbolID),
+					SymbolID:     encodedSymbolID,
 					FilePath:     annotated.FilePath,
 					Line:         annotated.Symbol.Line,
 					DirectLabels: annotated.Annotation.Labels,

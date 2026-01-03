@@ -1,99 +1,40 @@
 package core
 
 import (
-	"errors"
-	"fmt"
+	"github.com/standardbeagle/lci/internal/encoding"
 	"github.com/standardbeagle/lci/internal/types"
 )
 
 // DenseObjectID provides high-density symbol-based encoding for code objects
 // Uses variable-length encoding with full character set for maximum density
 // Target: 3-8 character IDs using A-Za-z0-9_ (62 symbols) for human readability
+//
+// Note: This type uses the consolidated encoding package for base-63 operations.
 type DenseObjectID struct {
 	encoded string
 }
 
-// encodeChar converts a value 0-62 to its character representation
-// 0-25: A-Z, 26-51: a-z, 52-61: 0-9, 62: _
-func encodeChar(val uint64) byte {
-	if val < 26 {
-		return byte('A' + val)
-	} else if val < 52 {
-		return byte('a' + (val - 26))
-	} else if val < 62 {
-		return byte('0' + (val - 52))
-	} else if val == 62 {
-		return '_'
-	}
-	panic("invalid encode value")
-}
-
-// decodeChar converts a character to its value 0-62
-func decodeChar(c byte) (uint64, error) {
-	if c >= 'A' && c <= 'Z' {
-		return uint64(c - 'A'), nil
-	} else if c >= 'a' && c <= 'z' {
-		return uint64(c - 'a' + 26), nil
-	} else if c >= '0' && c <= '9' {
-		return uint64(c - '0' + 52), nil
-	} else if c == '_' {
-		return 62, nil
-	}
-	return 0, fmt.Errorf("invalid character '%c' in dense encoding", c)
-}
-
-// encodeSymbol maps file ID and local symbol ID to dense string
+// encodeSymbol maps file ID and local symbol ID to dense string.
+// Uses the consolidated encoding package.
 func encodeSymbol(fileID uint32, localSymbolID uint32) string {
-	// Combine 32-bit FileID and 32-bit LocalSymbolID into 64-bit value
-	// FileID in lower 32 bits, LocalSymbolID in upper 32 bits
-	combined := uint64(fileID) | (uint64(localSymbolID) << 32)
-
-	if combined == 0 {
-		return "" // Return empty for zero values
-	}
-
-	// Use base-63 encoding for maximum density
-	var result []byte
-	const base = 63
-
-	// Encode the entire combined value
-	for combined > 0 {
-		result = append(result, encodeChar(combined%base))
-		combined /= base
-	}
-
-	// Reverse since we encoded least significant digits first
-	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
-		result[i], result[j] = result[j], result[i]
-	}
-
-	return string(result)
+	combined := encoding.PackUint32Pair(fileID, localSymbolID)
+	return encoding.Base63EncodeNoZero(combined)
 }
 
-// decodeSymbol extracts file ID and local symbol ID from dense string
+// decodeSymbol extracts file ID and local symbol ID from dense string.
+// Uses the consolidated encoding package.
 func decodeSymbol(encoded string) (types.FileID, uint32, error) {
 	if encoded == "" {
-		return 0, 0, errors.New("empty encoded symbol")
+		return 0, 0, encoding.ErrEmptyString
 	}
 
-	var combined uint64
-	const base = 63
-
-	// Decode from most significant to least significant
-	for i := 0; i < len(encoded); i++ {
-		charValue, err := decodeChar(encoded[i])
-		if err != nil {
-			return 0, 0, err
-		}
-		combined = combined*base + charValue
+	combined, err := encoding.Base63Decode(encoded)
+	if err != nil {
+		return 0, 0, err
 	}
 
-	// Extract components
-	// FileID is in lower 32 bits, LocalSymbolID in upper 32 bits
-	fileID := types.FileID(combined & 0xFFFFFFFF)
-	localSymbolID := uint32((combined >> 32) & 0xFFFFFFFF)
-
-	return fileID, localSymbolID, nil
+	lower, upper := encoding.UnpackUint32Pair(combined)
+	return types.FileID(lower), upper, nil
 }
 
 // NewDenseObjectID creates a dense object ID from file ID and local symbol ID

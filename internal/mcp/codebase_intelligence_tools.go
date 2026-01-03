@@ -2523,7 +2523,7 @@ func (s *Server) analyzePerformancePatterns(allFiles []*types.FileInfo, maxResul
 			antiPattern := PerformanceAntiPattern{
 				Type:        PerformancePatternType(p.Type),
 				Symbol:      p.Symbol,
-				ObjectID:    fmt.Sprintf("%d", p.SymbolID), // Convert SymbolID to string
+				ObjectID:    searchtypes.EncodeSymbolID(p.SymbolID),
 				Location:    location,
 				Severity:    p.Severity,
 				Description: p.Description,

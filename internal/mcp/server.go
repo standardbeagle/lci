@@ -19,6 +19,7 @@ import (
 	"github.com/standardbeagle/lci/internal/config"
 	"github.com/standardbeagle/lci/internal/core"
 	"github.com/standardbeagle/lci/internal/indexing"
+	mcputils "github.com/standardbeagle/lci/internal/mcp/utils"
 	"github.com/standardbeagle/lci/internal/search"
 	"github.com/standardbeagle/lci/internal/semantic"
 	"github.com/standardbeagle/lci/internal/types"
@@ -371,6 +372,17 @@ type ObjectContext struct {
 	Signature  string   `json:"signature,omitempty"`
 	Definition string   `json:"definition,omitempty"`
 	Context    []string `json:"context,omitempty"`
+	Purity     *PurityInfo `json:"purity,omitempty"` // Purity analysis for functions/methods
+}
+
+// PurityInfo contains function purity analysis results
+type PurityInfo struct {
+	IsPure         bool     `json:"is_pure"`                    // True if function has no side effects
+	PurityScore    float64  `json:"purity_score"`               // 0.0-1.0, higher is more pure
+	Confidence     string   `json:"confidence"`                 // proven, high, medium, low
+	LocalEffects   []string `json:"local_effects,omitempty"`    // Direct side effects in this function
+	TransitiveEffects []string `json:"transitive_effects,omitempty"` // Side effects from called functions
+	Reasons        []string `json:"reasons,omitempty"`          // Human-readable explanations
 }
 
 // ObjectContextParams represents parameters for the get_object_context tool
@@ -945,6 +957,63 @@ func NewServer(goroutineIndex *indexing.MasterIndex, cfg *config.Config) (*Serve
 	s.startAutoIndexing()
 
 	return s, nil
+}
+
+// =============================================================================
+// Symbol Lookup Helpers
+// =============================================================================
+
+// GetSymbol looks up a symbol by its base-63 encoded ID.
+// Returns the enhanced symbol or nil if not found.
+// This is a convenience wrapper that handles parsing and lookup in one call.
+func (s *Server) GetSymbol(encodedID string) *types.EnhancedSymbol {
+	if s.goroutineIndex == nil {
+		return nil
+	}
+
+	symbolID, err := mcputils.ParseSymbolID(encodedID)
+	if err != nil {
+		return nil
+	}
+
+	tracker := s.goroutineIndex.GetRefTracker()
+	if tracker == nil {
+		return nil
+	}
+
+	return tracker.GetEnhancedSymbol(symbolID)
+}
+
+// GetSymbolByID looks up a symbol by its numeric SymbolID.
+// Returns the enhanced symbol or nil if not found.
+func (s *Server) GetSymbolByID(id types.SymbolID) *types.EnhancedSymbol {
+	if s.goroutineIndex == nil {
+		return nil
+	}
+
+	tracker := s.goroutineIndex.GetRefTracker()
+	if tracker == nil {
+		return nil
+	}
+
+	return tracker.GetEnhancedSymbol(id)
+}
+
+// GetFilePath returns the file path for a FileID.
+// Returns empty string if not found.
+func (s *Server) GetFilePath(fileID types.FileID) string {
+	if s.goroutineIndex == nil {
+		return ""
+	}
+	return s.goroutineIndex.GetFilePath(fileID)
+}
+
+// GetRefTracker returns the reference tracker or nil if not available.
+func (s *Server) GetRefTracker() *core.ReferenceTracker {
+	if s.goroutineIndex == nil {
+		return nil
+	}
+	return s.goroutineIndex.GetRefTracker()
 }
 
 // startAutoIndexing uses the AutoIndexingManager to ensure proper state management,

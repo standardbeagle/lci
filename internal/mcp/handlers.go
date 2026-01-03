@@ -1801,15 +1801,10 @@ func (s *Server) handleGetObjectContext(ctx context.Context, req *mcp.CallToolRe
 		}
 	}
 
-	// Get components from index
-	refTracker := s.goroutineIndex.GetRefTracker()
-	graphPropagator := s.goroutineIndex.GetGraphPropagator()
-	fileService := core.NewFileService()
-
 	// Build context for each object using simplified ObjectContext type
 	contexts := make([]ObjectContext, 0, len(objectIDs))
 	for _, objectID := range objectIDs {
-		objCtx := s.buildObjectContextCompact(ctx, objectID, refTracker, graphPropagator, fileService, &args)
+		objCtx := s.buildObjectContextCompact(ctx, objectID, &args)
 		if objCtx != nil {
 			contexts = append(contexts, *objCtx)
 		}
@@ -1843,10 +1838,13 @@ func (s *Server) handleGetObjectContextWithMode(ctx context.Context, args *Objec
 
 	// Create context lookup engine if not already created
 	if s.contextLookupEngine == nil {
+		// Create file service with MasterIndex file path lookup integration
+		fileService := core.NewFileService()
+		fileService.SetExternalPathLookup(s.goroutineIndex.GetFilePath)
 		s.contextLookupEngine = core.NewContextLookupEngine(
 			s.goroutineIndex.GetSymbolIndex(),
 			s.goroutineIndex.GetTrigramIndex(),
-			core.NewFileService(),
+			fileService,
 			s.goroutineIndex.GetGraphPropagator(),
 			s.goroutineIndex.GetSemanticAnnotator(),
 			core.NewComponentDetector(),
@@ -1958,27 +1956,17 @@ func (s *Server) applyContextLookupMode(args *ObjectContextParams) {
 	}
 }
 
-// buildObjectContextCompact creates a simplified ObjectContext for compact formatting
-func (s *Server) buildObjectContextCompact(ctx context.Context, objectID string, refTracker, graphPropagator interface{}, fileService interface{}, args *ObjectContextParams) *ObjectContext {
-	tracker, ok := refTracker.(*core.ReferenceTracker)
-	if !ok || tracker == nil {
-		return nil
-	}
-
-	// Parse objectID to extract symbol ID
-	symbolID, err := mcputils.ParseSymbolID(objectID)
-	if err != nil {
-		return nil
-	}
-
-	// Get enhanced symbol from tracker
-	enhancedSym := tracker.GetEnhancedSymbol(symbolID)
+// buildObjectContextCompact creates a simplified ObjectContext for compact formatting.
+// Uses the Server's helper methods for clean symbol lookup.
+func (s *Server) buildObjectContextCompact(ctx context.Context, objectID string, args *ObjectContextParams) *ObjectContext {
+	// Use the Server's helper method for symbol lookup
+	enhancedSym := s.GetSymbol(objectID)
 	if enhancedSym == nil {
 		return nil
 	}
 
-	// Get file path from the index (FileService is empty, need to use goroutineIndex)
-	filePath := s.goroutineIndex.GetFilePath(enhancedSym.FileID)
+	// Get file path using helper
+	filePath := s.GetFilePath(enhancedSym.FileID)
 
 	// Create simplified ObjectContext
 	result := &ObjectContext{
@@ -2000,11 +1988,48 @@ func (s *Server) buildObjectContextCompact(ctx context.Context, objectID string,
 
 	// Add context if requested
 	if args.IncludeFileContext {
-		// Simple context - just the definition line
 		result.Context = []string{result.Definition}
 	}
 
+	// Add purity information for functions and methods
+	if enhancedSym.Type == types.SymbolTypeFunction || enhancedSym.Type == types.SymbolTypeMethod {
+		symbolID, _ := mcputils.ParseSymbolID(objectID)
+		result.Purity = s.getPurityInfo(symbolID)
+	}
+
 	return result
+}
+
+// getPurityInfo retrieves purity analysis for a function symbol
+func (s *Server) getPurityInfo(symbolID types.SymbolID) *PurityInfo {
+	propagator := s.goroutineIndex.GetSideEffectPropagator()
+	if propagator == nil {
+		return nil
+	}
+
+	report := propagator.GetPurityReport(symbolID)
+	if report == nil {
+		return nil
+	}
+
+	purity := &PurityInfo{
+		IsPure:      report.IsPure,
+		PurityScore: report.PurityScore,
+		Confidence:  report.Confidence.String(),
+		Reasons:     report.Reasons,
+	}
+
+	// Add local effect categories
+	if report.LocalCategories != types.SideEffectNone {
+		purity.LocalEffects = categoriesToStrings(report.LocalCategories)
+	}
+
+	// Add transitive effect categories
+	if report.TransitiveCategories != types.SideEffectNone {
+		purity.TransitiveEffects = categoriesToStrings(report.TransitiveCategories)
+	}
+
+	return purity
 }
 
 // ============================================================================
@@ -2050,28 +2075,54 @@ func (s *Server) paramsToObjectID(params *ObjectContextParams) (*core.CodeObject
 	// Default symbol type
 	var symbolType types.SymbolType = types.SymbolTypeFunction
 
-	// If we have an ID parameter, use it directly as the symbol ID
-	symbolID := ""
+	// If we have an ID parameter, decode it and look up the symbol
+	symbolIDStr := ""
 	if params.ID != "" {
 		// ID parameter contains the concise object ID directly
 		// Use strings.Cut for zero-copy extraction of first ID
 		if first, _, found := strings.Cut(params.ID, ","); found {
-			symbolID = first
+			symbolIDStr = first
 		} else {
-			symbolID = params.ID
+			symbolIDStr = params.ID
 		}
+
+		// Decode the base63 symbol ID to get the numeric SymbolID
+		numericSymbolID, err := mcputils.ParseSymbolID(symbolIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid object ID %q: %w", symbolIDStr, err)
+		}
+
+		// Look up the symbol in the index to get FileID and Name
+		if s.goroutineIndex != nil {
+			refTracker := s.goroutineIndex.GetRefTracker()
+			if refTracker != nil {
+				enhancedSym := refTracker.GetEnhancedSymbol(numericSymbolID)
+				if enhancedSym != nil {
+					// Successfully looked up the symbol - use its data
+					return &core.CodeObjectID{
+						FileID:   enhancedSym.FileID,
+						SymbolID: symbolIDStr,
+						Name:     enhancedSym.Name,
+						Type:     enhancedSym.Type,
+					}, nil
+				}
+			}
+		}
+
+		// Fall through to create object ID with provided params if lookup failed
+		// This maintains backward compatibility
 	}
 
-	// Create the object ID
+	// Create the object ID from provided parameters
 	objectID := &core.CodeObjectID{
 		FileID:   types.FileID(params.FileID),
-		SymbolID: symbolID,
+		SymbolID: symbolIDStr,
 		Name:     params.Name,
 		Type:     symbolType,
 	}
 
 	// If symbol ID is not provided, try to find the symbol in the file by name
-	if symbolID == "" && params.Name != "" {
+	if symbolIDStr == "" && params.Name != "" {
 		symbol, err := s.findSymbolInFile(objectID.FileID, params.Name, params.Line, params.Column)
 		if err != nil {
 			return nil, fmt.Errorf("could not find symbol %s in file %d: %w", params.Name, params.FileID, err)

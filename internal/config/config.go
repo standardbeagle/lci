@@ -311,6 +311,61 @@ func LoadWithRoot(path string, rootDir string) (*Config, error) {
 			"**/*.chunk.js",
 			"**/*.min.map", // Source maps for minified files
 
+			// Test files and directories (language-agnostic patterns)
+			// Go test files
+			"**/*_test.go",
+			"**/*_tests.go",
+			// Python test files
+			"**/*_test.py",
+			"**/*_tests.py",
+			"**/test_*.py",
+			"**/tests_*.py",
+			// JavaScript/TypeScript test files (Jest, Vitest, Mocha)
+			"**/*.test.js",
+			"**/*.test.ts",
+			"**/*.test.tsx",
+			"**/*.test.jsx",
+			"**/*.spec.js",
+			"**/*.spec.ts",
+			"**/*.spec.tsx",
+			"**/*.spec.jsx",
+			// Generic test file prefixes (any extension)
+			"**/test_*",
+			"**/tests_*",
+			// Test directories
+			"**/__tests__/**",
+			"**/test/**",
+			"**/tests/**",
+			"**/testdata/**",
+			"**/__testdata__/**",
+			"**/fixtures/**",
+			"**/.test/**",
+			// Ruby test files
+			"**/*_test.rb",
+			"**/*_spec.rb",
+			// Java test files
+			"**/*Test.java",
+			"**/*Tests.java",
+			"**/*TestCase.java",
+			// C# test files
+			"**/*Test.cs",
+			"**/*Tests.cs",
+			"**/*Test.csproj",
+			// Rust test files
+			"**/tests/**",
+			// PHP test files
+			"**/*Test.php",
+			"**/*TestCase.php",
+			// Kotlin test files
+			"**/*Test.kt",
+			"**/*Tests.kt",
+			"**/*TestCase.kt",
+			// Swift test files
+			"**/*Test.swift",
+			// Objective-C test files
+			"**/*Test.m",
+			"**/*Test.h",
+
 			// Binary files (commonly found in codebases)
 			"**/*.avif",  // AVIF image format
 			"**/*.webp",  // WebP image format

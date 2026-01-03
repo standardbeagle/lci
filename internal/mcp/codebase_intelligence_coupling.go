@@ -214,7 +214,8 @@ func (s *Server) calculateGraphBasedCouplingCohesion(allFiles []*types.FileInfo)
 		if cohesion < minCohesion {
 			minCohesion = cohesion
 		}
-		if cohesion < 0.3 {
+		// Exclude test-related packages from low cohesion reporting
+		if cohesion < 0.3 && !s.isInsightExcludedFile(pkgName) {
 			lowCohesionPkgs = append(lowCohesionPkgs, pkgName)
 		}
 	}

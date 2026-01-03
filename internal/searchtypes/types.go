@@ -1,9 +1,7 @@
 package searchtypes
 
 import (
-	"errors"
-	"fmt"
-
+	"github.com/standardbeagle/lci/internal/idcodec"
 	"github.com/standardbeagle/lci/internal/types"
 )
 
@@ -90,67 +88,16 @@ func PopulateDenseObjectIDs(results []StandardResult) {
 	}
 }
 
-// EncodeSymbolID encodes a SymbolID as a dense base-63 string
+// EncodeSymbolID encodes a SymbolID as a dense base-63 string.
+// Delegates to idcodec for the canonical implementation.
 func EncodeSymbolID(symbolID types.SymbolID) string {
-	if symbolID == 0 {
-		return "A" // Minimum non-empty encoding
-	}
-
-	id := uint64(symbolID)
-	var result []byte
-	const base = 63
-
-	// Encode using base-63 (A-Za-z0-9_)
-	for id > 0 {
-		val := id % base
-		var c byte
-		if val < 26 {
-			c = byte('A' + val)
-		} else if val < 52 {
-			c = byte('a' + (val - 26))
-		} else if val < 62 {
-			c = byte('0' + (val - 52))
-		} else {
-			c = '_'
-		}
-		result = append(result, c)
-		id /= base
-	}
-
-	// Reverse for correct order
-	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
-		result[i], result[j] = result[j], result[i]
-	}
-
-	return string(result)
+	return idcodec.EncodeSymbolID(symbolID)
 }
 
-// DecodeSymbolID decodes a base-63 string back to a SymbolID
+// DecodeSymbolID decodes a base-63 string back to a SymbolID.
+// Delegates to idcodec for the canonical implementation.
 func DecodeSymbolID(encoded string) (types.SymbolID, error) {
-	if encoded == "" {
-		return 0, errors.New("empty encoded string")
-	}
-
-	var id uint64
-	const base = 63
-
-	for _, c := range encoded {
-		var val uint64
-		if c >= 'A' && c <= 'Z' {
-			val = uint64(c - 'A')
-		} else if c >= 'a' && c <= 'z' {
-			val = uint64(c-'a') + 26
-		} else if c >= '0' && c <= '9' {
-			val = uint64(c-'0') + 52
-		} else if c == '_' {
-			val = 62
-		} else {
-			return 0, fmt.Errorf("invalid character in encoded string: %c", c)
-		}
-		id = id*base + val
-	}
-
-	return types.SymbolID(id), nil
+	return idcodec.DecodeSymbolID(encoded)
 }
 
 // DefaultSearchOptions returns search options with sensible defaults

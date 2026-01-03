@@ -32,6 +32,9 @@ type FileService struct {
 	maxFileSizeBytes int64
 	ignoreDotFiles   bool
 	ignorePatterns   []string
+
+	// Optional external file path lookup function (for integration with MasterIndex)
+	externalPathLookup func(types.FileID) string
 }
 
 // FileSystemInterface abstracts filesystem operations for testing and flexibility
@@ -490,6 +493,13 @@ func (fs *FileService) GetFileIDForPath(path string) types.FileID {
 
 // GetPathForFileID returns the path for a FileID, or empty string if not found
 func (fs *FileService) GetPathForFileID(fileID types.FileID) string {
+	// Try external lookup first if available (for MasterIndex integration)
+	if fs.externalPathLookup != nil {
+		if path := fs.externalPathLookup(fileID); path != "" {
+			return path
+		}
+	}
+
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
@@ -499,6 +509,12 @@ func (fs *FileService) GetPathForFileID(fileID types.FileID) string {
 		}
 	}
 	return ""
+}
+
+// SetExternalPathLookup sets an external function for file path lookup
+// This allows integration with MasterIndex or other file path providers
+func (fs *FileService) SetExternalPathLookup(fn func(types.FileID) string) {
+	fs.externalPathLookup = fn
 }
 
 // GetAllLoadedFiles returns a map of path -> FileID for all loaded files

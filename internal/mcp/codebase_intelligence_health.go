@@ -10,7 +10,29 @@ import (
 
 	"github.com/standardbeagle/lci/internal/searchtypes"
 	"github.com/standardbeagle/lci/internal/types"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
+
+// isInsightExcludedFile returns true if the file should be excluded from
+// code insight reports (but still counted in aggregate statistics).
+// Uses config-based exclusion patterns which include default test file patterns.
+func (s *Server) isInsightExcludedFile(path string) bool {
+	// Config-based exclusions (includes all test file patterns by default)
+	if s.cfg != nil {
+		for _, pattern := range s.cfg.Exclude {
+			matched, err := doublestar.Match(pattern, path)
+			if err != nil {
+				continue // Skip invalid patterns
+			}
+			if matched {
+				return true
+			}
+		}
+	}
+
+	return false
+}
 
 // ============================================================================
 // Code Smell Detection Thresholds
@@ -63,8 +85,8 @@ func (s *Server) calculateComplexityMetricsFromFiles(allFiles []*types.FileInfo)
 					distribution["medium"]++
 				} else {
 					distribution["high"]++
-					// Track high complexity functions for reporting
-					if len(highComplexityFuncs) < 10 { // Limit to top 10
+					// Track high complexity functions for reporting (exclude test files)
+					if len(highComplexityFuncs) < 10 && !s.isInsightExcludedFile(file.Path) {
 						objectID := searchtypes.EncodeSymbolID(sym.ID)
 						highComplexityFuncs = append(highComplexityFuncs, FunctionInfo{
 							ObjectID:   objectID,
@@ -392,6 +414,11 @@ func (s *Server) buildPuritySummary() *PuritySummary {
 
 	for _, info := range allEffects {
 		if info == nil {
+			continue
+		}
+
+		// Skip test files from purity reporting
+		if s.isInsightExcludedFile(info.FilePath) {
 			continue
 		}
 

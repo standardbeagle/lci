@@ -2,9 +2,11 @@ package types
 
 import (
 	"testing"
+
+	"github.com/standardbeagle/lci/internal/encoding"
 )
 
-// Test valueToChar helper function
+// Test Base63ValueToChar helper function (from encoding package)
 func TestValueToChar(t *testing.T) {
 	tests := []struct {
 		val      uint64
@@ -20,14 +22,14 @@ func TestValueToChar(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := valueToChar(tt.val)
+		result := encoding.Base63ValueToChar(tt.val)
 		if result != tt.expected {
-			t.Errorf("valueToChar(%d) = %c, expected %c", tt.val, result, tt.expected)
+			t.Errorf("Base63ValueToChar(%d) = %c, expected %c", tt.val, result, tt.expected)
 		}
 	}
 }
 
-// Test charToValue helper function
+// Test Base63CharToValue helper function (from encoding package)
 func TestCharToValue(t *testing.T) {
 	tests := []struct {
 		input    rune
@@ -45,16 +47,16 @@ func TestCharToValue(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result, err := charToValue(tt.input)
+		result, err := encoding.Base63CharToValue(tt.input)
 		if tt.hasError {
 			if err == nil {
-				t.Errorf("charToValue(%c) expected error but got none", tt.input)
+				t.Errorf("Base63CharToValue(%c) expected error but got none", tt.input)
 			}
 		} else {
 			if err != nil {
-				t.Errorf("charToValue(%c) got unexpected error: %v", tt.input, err)
+				t.Errorf("Base63CharToValue(%c) got unexpected error: %v", tt.input, err)
 			} else if result != tt.expected {
-				t.Errorf("charToValue(%c) = %d, expected %d", tt.input, result, tt.expected)
+				t.Errorf("Base63CharToValue(%c) = %d, expected %d", tt.input, result, tt.expected)
 			}
 		}
 	}

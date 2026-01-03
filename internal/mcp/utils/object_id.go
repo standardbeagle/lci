@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/standardbeagle/lci/internal/searchtypes"
+	"github.com/standardbeagle/lci/internal/idcodec"
 	"github.com/standardbeagle/lci/internal/types"
 )
 
@@ -56,7 +56,7 @@ func parseSymbolObjectID(parts []string) (*ObjectID, error) {
 		return nil, errors.New("invalid symbol ID format: expected 'symbol:id'")
 	}
 
-	id, err := strconv.ParseUint(parts[1], 10, 32)
+	id, err := strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid symbol ID: %w", err)
 	}
@@ -103,38 +103,24 @@ func parseFileObjectID(parts []string) (*ObjectID, error) {
 }
 
 // parseBase63ObjectID handles base63-encoded IDs (e.g., "GU", "ABC123", "test_var")
-// This is the primary format for symbol IDs
+// This is the primary format for symbol IDs.
+// Uses the consolidated idcodec package for decoding.
 func parseBase63ObjectID(idStr string) (*ObjectID, error) {
-	// Try to decode as base63
-	var id uint64
-	const base = 63
-
-	for _, c := range idStr {
-		var val uint64
-		if c >= 'A' && c <= 'Z' {
-			val = uint64(c - 'A')
-		} else if c >= 'a' && c <= 'z' {
-			val = uint64(c-'a') + 26
-		} else if c >= '0' && c <= '9' {
-			val = uint64(c-'0') + 52
-		} else if c == '_' {
-			val = 62
-		} else {
-			return nil, fmt.Errorf("invalid character in base63 ID: %c", c)
-		}
-		id = id*base + val
+	id, err := idcodec.DecodeSymbolID(idStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base63 ID: %w", err)
 	}
 
 	// Default to symbol for base63 IDs
 	return &ObjectID{
 		Type:     "symbol",
-		SymbolID: types.SymbolID(id),
+		SymbolID: id,
 	}, nil
 }
 
 // parseNumericObjectID handles backward compatibility with numeric IDs
 func parseNumericObjectID(idStr string) (*ObjectID, error) {
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid numeric ID: %w", err)
 	}
@@ -156,10 +142,10 @@ func ParseSymbolID(objectID string) (types.SymbolID, error) {
 	return parsed.SymbolID, nil
 }
 
-// DecodeSymbolID decodes a base-63 encoded objectID to SymbolID
-// Simple wrapper for backward compatibility - delegates to searchtypes
+// DecodeSymbolID decodes a base-63 encoded objectID to SymbolID.
+// Simple wrapper for backward compatibility - delegates to idcodec.
 func DecodeSymbolID(objectID string) (types.SymbolID, error) {
-	return searchtypes.DecodeSymbolID(objectID)
+	return idcodec.DecodeSymbolID(objectID)
 }
 
 // ParseFileID extracts file ID and line number from object ID
