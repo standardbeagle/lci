@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,19 +297,18 @@ func Function5() {}
 	// Perform 50 concurrent searches
 	var wg sync.WaitGroup
 	searchCount := 50
-	successCount := int32(0)
-	var mu sync.Mutex
+	var successCount int32 // Use atomic operations instead of mutex
 
 	for i := 0; i < searchCount; i++ {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			pattern := "Function" + string(rune('1'+(index%5)))
+			// Use efficient string formatting instead of rune conversion
+			funcNum := (index % 5) + 1
+			pattern := "Function" + strconv.Itoa(funcNum)
 			results, err := client.Search(pattern, types.SearchOptions{}, 100)
 			if err == nil && len(results) >= 1 {
-				mu.Lock()
-				successCount++
-				mu.Unlock()
+				atomic.AddInt32(&successCount, 1)
 			}
 		}(i)
 	}

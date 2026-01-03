@@ -995,25 +995,54 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 	// Update file mapping with copy-on-write (we already hold snapshotMu lock)
 	// NOTE: We already hold the snapshotMu lock from line 932, so we can't call
 	// updateSnapshotAtomic as it would try to acquire the lock again (deadlock!)
+	//
+	// OPTIMIZATION: We only modify 1-2 entries (remove old, add new), so we can
+	// create a new snapshot that shares the maps with the old snapshot, then
+	// selectively copy only the maps we need to modify.
 	oldSnapshot := mi.fileSnapshot.Load()
+
+	// Strategy: Create new snapshot with shared map references initially,
+	// then replace only maps that need modification with shallow copies.
+	// This avoids copying 10K+ entries when we only change 1-2.
 	newSnapshot := &FileSnapshot{
-		fileMap:        copyMapStringToFileID(oldSnapshot.fileMap),
-		reverseFileMap: copyMapFileIDToString(oldSnapshot.reverseFileMap),
-		fileScopes:     copyMapFileIDToScopeInfo(oldSnapshot.fileScopes),
+		fileMap:        oldSnapshot.fileMap,        // Share initially
+		reverseFileMap: oldSnapshot.reverseFileMap, // Share initially
+		fileScopes:     oldSnapshot.fileScopes,     // Share initially
 		// fileCache removed - use FileContentStore instead
 	}
 
-	// Remove old file mappings and add new ones
-	delete(newSnapshot.fileMap, path)
+	// Copy-on-write: Only copy maps we need to modify
+	// Case 1: Updating existing file (remove old entry, add new entry)
+	// Case 2: Adding new file (only add new entry)
+
 	if existsForClosure {
+		// Updating existing file - need to remove old FileID and add new one
+		// Copy all three maps since we're modifying all of them
+		newSnapshot.fileMap = copyMapStringToFileID(oldSnapshot.fileMap)
+		newSnapshot.reverseFileMap = copyMapFileIDToString(oldSnapshot.reverseFileMap)
+		newSnapshot.fileScopes = copyMapFileIDToScopeInfo(oldSnapshot.fileScopes)
+
+		// Remove old file mappings
+		delete(newSnapshot.fileMap, path)
 		delete(newSnapshot.reverseFileMap, oldFileIDForClosure)
 		delete(newSnapshot.fileScopes, oldFileIDForClosure)
-	}
 
-	// Add new file mappings
-	newSnapshot.fileMap[path] = fileID
-	newSnapshot.reverseFileMap[fileID] = path
-	// fileCache updates removed
+		// Add new file mappings
+		newSnapshot.fileMap[path] = fileID
+		newSnapshot.reverseFileMap[fileID] = path
+		// Note: fileScopes will be updated later after parsing
+	} else {
+		// Adding new file - only need to add new entry
+		// Only copy fileMap and reverseFileMap (we're adding to them)
+		newSnapshot.fileMap = copyMapStringToFileID(oldSnapshot.fileMap)
+		newSnapshot.reverseFileMap = copyMapFileIDToString(oldSnapshot.reverseFileMap)
+		// fileScopes can be shared until we need to add scopes
+
+		// Add new file mappings
+		newSnapshot.fileMap[path] = fileID
+		newSnapshot.reverseFileMap[fileID] = path
+		// Note: fileScopes will be copied when we need to add scopes
+	}
 
 	mi.fileSnapshot.Store(newSnapshot)
 

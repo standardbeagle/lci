@@ -177,8 +177,6 @@ func InitialFunction() {}
 	searchEngine := search.NewEngine(externalIndexer)
 	externalIndexer.SetSearchEngine(searchEngine)
 
-	require.NoError(t, err)
-
 	// Start server
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)
@@ -273,8 +271,6 @@ func DeleteThisFunction() {}
 	searchEngine := search.NewEngine(externalIndexer)
 	externalIndexer.SetSearchEngine(searchEngine)
 
-	require.NoError(t, err)
-
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)
 	err = srv.Start()
@@ -365,8 +361,6 @@ func Version1Function() {}
 
 	searchEngine := search.NewEngine(externalIndexer)
 	externalIndexer.SetSearchEngine(searchEngine)
-
-	require.NoError(t, err)
 
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)

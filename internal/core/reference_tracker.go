@@ -1117,7 +1117,7 @@ func (rt *ReferenceTracker) FindSymbolsByName(name string) []*types.EnhancedSymb
 
 	// Fast path: no filtering
 	if rt.deletedFileTracker == nil {
-		var symbols []*types.EnhancedSymbol
+		symbols := make([]*types.EnhancedSymbol, 0, len(symbolIDs))
 		for _, symbolID := range symbolIDs {
 			if symbol := rt.symbols.Get(symbolID); symbol != nil {
 				symbols = append(symbols, symbol)
@@ -1128,12 +1128,13 @@ func (rt *ReferenceTracker) FindSymbolsByName(name string) []*types.EnhancedSymb
 
 	// Filter deleted files (get deleted set once)
 	deletedSet := rt.deletedFileTracker.GetDeletedSet()
-	var symbols []*types.EnhancedSymbol
+	hasDeletedFiles := deletedSet.Len() > 0
+	symbols := make([]*types.EnhancedSymbol, 0, len(symbolIDs))
 	for _, symbolID := range symbolIDs {
 		symbol := rt.symbols.Get(symbolID)
 		if symbol != nil {
 			// Skip symbols from deleted files
-			if deletedSet.Len() > 0 && deletedSet.Contains(symbol.FileID) {
+			if hasDeletedFiles && deletedSet.Contains(symbol.FileID) {
 				continue
 			}
 			symbols = append(symbols, symbol)
