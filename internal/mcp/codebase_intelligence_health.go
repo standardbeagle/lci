@@ -289,21 +289,6 @@ func (s *Server) calculateOverallHealthScore(complexity ComplexityMetrics, total
 	return score
 }
 
-// calculateHealthGrade converts score to letter grade
-func (s *Server) calculateHealthGrade(score float64) string {
-	switch {
-	case score >= 9:
-		return "A"
-	case score >= 8:
-		return "B"
-	case score >= 7:
-		return "C"
-	case score >= 6:
-		return "D"
-	default:
-		return "F"
-	}
-}
 
 // calculateTechnicalDebtRatioFromFiles calculates technical debt as a percentage
 func (s *Server) calculateTechnicalDebtRatioFromFiles(allFiles []*types.FileInfo) float64 {
@@ -326,21 +311,6 @@ func (s *Server) calculateTechnicalDebtRatioFromFiles(allFiles []*types.FileInfo
 	return float64(debtSymbols) / float64(totalSymbols)
 }
 
-// calculateDebtGrade converts debt ratio to letter grade
-func (s *Server) calculateDebtGrade(ratio float64) string {
-	switch {
-	case ratio < 0.05:
-		return "A"
-	case ratio < 0.10:
-		return "B"
-	case ratio < 0.20:
-		return "C"
-	case ratio < 0.30:
-		return "D"
-	default:
-		return "F"
-	}
-}
 
 // estimateDebtRemediationTime estimates remediation time
 func (s *Server) estimateDebtRemediationTime(ratio float64) string {
@@ -449,26 +419,9 @@ func (s *Server) buildPuritySummary() *PuritySummary {
 	if summary.TotalFunctions > 0 {
 		summary.PurityRatio = float64(summary.PureFunctions) / float64(summary.TotalFunctions)
 	}
-	summary.Grade = calculatePurityGrade(summary.PurityRatio)
 	summary.DetailedQuery = `side_effects {"mode": "impure", "include_reasons": true}`
 
 	return summary
-}
-
-// calculatePurityGrade returns a letter grade based on purity ratio
-func calculatePurityGrade(ratio float64) string {
-	switch {
-	case ratio >= 0.8:
-		return "A"
-	case ratio >= 0.6:
-		return "B"
-	case ratio >= 0.4:
-		return "C"
-	case ratio >= 0.2:
-		return "D"
-	default:
-		return "F"
-	}
 }
 
 // calculateDetailedCodeSmells detects 5 types of code smells with severity levels
@@ -713,22 +666,9 @@ func calculateQualityMetricsFromComplexity(complexity ComplexityMetrics) Quality
 		debtRatio = float64(complexity.Distribution["high"]) / float64(totalFuncs)
 	}
 
-	grade := "A"
-	switch {
-	case mi < 20:
-		grade = "F"
-	case mi < 40:
-		grade = "D"
-	case mi < 60:
-		grade = "C"
-	case mi < 80:
-		grade = "B"
-	}
-
 	return QualityMetrics{
 		MaintainabilityIndex: mi,
 		TechnicalDebtRatio:   debtRatio,
-		Grade:                grade,
 	}
 }
 
@@ -755,7 +695,6 @@ func (s *Server) buildHealthDashboard(
 	}
 
 	overallScore := s.calculateOverallHealthScore(complexityMetrics, len(allFiles))
-	grade := s.calculateHealthGrade(overallScore)
 
 	debtRatio := s.calculateTechnicalDebtRatioFromFiles(allFiles)
 	detailedSmells := s.calculateDetailedCodeSmells(allFiles)
@@ -766,11 +705,9 @@ func (s *Server) buildHealthDashboard(
 
 	healthDashboard := &HealthDashboard{
 		OverallScore: overallScore,
-		Grade:        grade,
 		Complexity:   complexityMetrics,
 		TechnicalDebt: TechnicalDebtMetrics{
 			Ratio:      debtRatio,
-			Grade:      s.calculateDebtGrade(debtRatio),
 			Estimate:   s.estimateDebtRemediationTime(debtRatio),
 			Components: s.identifyDebtComponents(allFiles),
 		},

@@ -162,7 +162,6 @@ type CouplingHotspot struct {
 // HealthDashboard represents codebase health metrics
 type HealthDashboard struct {
 	OverallScore     float64              `json:"overall_score"` // 0.0-10.0
-	Grade            string               `json:"grade"`         // A, B, C, D, F
 	Complexity       ComplexityMetrics    `json:"complexity"`
 	TechnicalDebt    TechnicalDebtMetrics `json:"technical_debt"`
 	Hotspots         []Hotspot            `json:"hotspots"`
@@ -191,7 +190,6 @@ type PuritySummary struct {
 	PureFunctions   int     `json:"pure_funcs"`   // Functions with no side effects
 	ImpureFunctions int     `json:"impure_funcs"` // Functions with side effects
 	PurityRatio     float64 `json:"purity_ratio"` // 0.0-1.0, higher is better
-	Grade           string  `json:"grade"`        // A (>80%), B (>60%), C (>40%), D (>20%), F
 
 	// Category breakdown (count of functions with each effect type)
 	WithParamWrites   int `json:"with_param_writes,omitempty"`   // Mutate parameters
@@ -275,7 +273,6 @@ type ComplexityMetrics struct {
 // TechnicalDebtMetrics represents technical debt analysis
 type TechnicalDebtMetrics struct {
 	Ratio      float64  `json:"ratio"`      // 0.0-1.0
-	Grade      string   `json:"grade"`      // A, B, C, D, F
 	Estimate   string   `json:"estimate"`   // e.g., "2 weeks"
 	Components []string `json:"components"` // Major debt contributors
 }
@@ -590,10 +587,7 @@ type QualityMetrics struct {
 	ReliabilityScore     float64 `json:"reliability_score"`
 	SecurityScore        float64 `json:"security_score"`
 	PerformanceScore     float64 `json:"performance_score"`
-
-	// Grading
-	Grade             string         `json:"grade"` // A, B, C, D, F
-	GradeDistribution map[string]int `json:"grade_distribution"`
+	PurityRatio          float64 `json:"purity_ratio"` // 0.0-1.0, ratio of pure functions
 }
 
 // RiskFactor represents a risk factor

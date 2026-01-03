@@ -525,7 +525,6 @@ type CodeInsightResult struct {
 	Parsed       map[string]interface{} // Parsed JSON (if available)
 	Mode         string
 	HealthScore  float64
-	HealthGrade  string
 	TotalFiles   int
 	TotalSymbols int
 	Modules      []string
@@ -600,22 +599,6 @@ func (r *CodeInsightResult) parseMetrics() {
 		// Parse health score: "score=8.5"
 		if strings.HasPrefix(line, "score=") {
 			fmt.Sscanf(line, "score=%f", &r.HealthScore)
-		}
-		// Parse health grade: "grade=A"
-		if strings.HasPrefix(line, "grade=") {
-			r.HealthGrade = strings.TrimPrefix(line, "grade=")
-		}
-		// Parse from combined line: "score=8.5 grade=A"
-		if strings.Contains(line, "score=") && strings.Contains(line, "grade=") {
-			parts := strings.Fields(line)
-			for _, part := range parts {
-				if strings.HasPrefix(part, "score=") {
-					fmt.Sscanf(part, "score=%f", &r.HealthScore)
-				}
-				if strings.HasPrefix(part, "grade=") {
-					r.HealthGrade = strings.TrimPrefix(part, "grade=")
-				}
-			}
 		}
 		// Parse total files from "total_files=123" or standalone "files=123"
 		if strings.HasPrefix(line, "total_files=") {

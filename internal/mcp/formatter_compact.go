@@ -236,8 +236,7 @@ func (f *CompactFormatter) FormatIntelligenceResponse(response *CodebaseIntellig
 	if response.HealthDashboard != nil {
 		lines = append(lines, "== HEALTH ==")
 		hd := response.HealthDashboard
-		lines = append(lines, fmt.Sprintf("score=%.1f grade=%s",
-			hd.OverallScore, hd.Grade))
+		lines = append(lines, fmt.Sprintf("score=%.2f", hd.OverallScore))
 		lines = append(lines, fmt.Sprintf("complexity=%.2f", hd.Complexity.AverageCC))
 
 		// Smell counts summary
@@ -317,8 +316,8 @@ func (f *CompactFormatter) FormatIntelligenceResponse(response *CodebaseIntellig
 		if hd.PuritySummary != nil {
 			ps := hd.PuritySummary
 			lines = append(lines, "purity:")
-			lines = append(lines, fmt.Sprintf("  total=%d pure=%d impure=%d ratio=%.2f grade=%s",
-				ps.TotalFunctions, ps.PureFunctions, ps.ImpureFunctions, ps.PurityRatio, ps.Grade))
+			lines = append(lines, fmt.Sprintf("  total=%d pure=%d impure=%d ratio=%.2f",
+				ps.TotalFunctions, ps.PureFunctions, ps.ImpureFunctions, ps.PurityRatio))
 			if ps.WithIOEffects > 0 || ps.WithGlobalWrites > 0 || ps.WithParamWrites > 0 {
 				lines = append(lines, fmt.Sprintf("  effects: io=%d global_writes=%d param_writes=%d throws=%d",
 					ps.WithIOEffects, ps.WithGlobalWrites, ps.WithParamWrites, ps.WithThrows))
@@ -505,10 +504,8 @@ func (f *CompactFormatter) FormatIntelligenceResponse(response *CodebaseIntellig
 			sr.CohesionMetrics.AverageCohesion, sr.CohesionMetrics.MinCohesion))
 
 		// Quality metrics
-		if sr.QualityMetrics.Grade != "" {
-			lines = append(lines, fmt.Sprintf("quality: grade=%s maintainability=%.2f debt=%.2f",
-				sr.QualityMetrics.Grade, sr.QualityMetrics.MaintainabilityIndex, sr.QualityMetrics.TechnicalDebtRatio))
-		}
+		lines = append(lines, fmt.Sprintf("quality: maintainability=%.2f debt=%.2f purity=%.2f",
+			sr.QualityMetrics.MaintainabilityIndex, sr.QualityMetrics.TechnicalDebtRatio, sr.QualityMetrics.PurityRatio))
 
 		// High complexity functions (limit to top 3)
 		if len(sr.ComplexityMetrics.HighComplexityFuncs) > 0 {

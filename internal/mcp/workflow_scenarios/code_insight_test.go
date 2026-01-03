@@ -25,17 +25,15 @@ func TestCodeInsight_Chi(t *testing.T) {
 		require.True(t, result.Contains("LCF/1.0"), "Expected LCF/1.0 header")
 		require.True(t, result.Contains("mode=overview"), "Expected mode=overview")
 
-		// REQUIRED: Health section with score and grade
+		// REQUIRED: Health section with score
 		require.True(t, result.Contains("HEALTH"), "Expected HEALTH section")
 		require.True(t, result.Contains("score="), "Expected health score")
-		require.True(t, result.Contains("grade="), "Expected health grade")
 
 		// Chi is well-maintained, should have good health
 		assert.Greater(t, result.HealthScore, 5.0,
 			"Chi should have health score > 5.0, got %.2f", result.HealthScore)
-		assert.NotEmpty(t, result.HealthGrade, "Health grade should be parsed")
 
-		t.Logf("Chi health: score=%.2f grade=%s", result.HealthScore, result.HealthGrade)
+		t.Logf("Chi health: score=%.2f", result.HealthScore)
 		t.Logf("Output preview:\n%s", truncateForLog(result.Raw, 500))
 	})
 
@@ -148,7 +146,7 @@ func TestCodeInsight_Chi(t *testing.T) {
 		})
 
 		// Should have quality metrics
-		assert.True(t, result.ContainsAny("quality", "maintainability", "grade"),
+		assert.True(t, result.ContainsAny("quality", "maintainability"),
 			"Expected quality/maintainability metrics")
 
 		t.Logf("Health stats:\n%s", truncateForLog(result.Raw, 600))
@@ -206,8 +204,8 @@ func TestCodeInsight_GoGithub(t *testing.T) {
 		assert.Greater(t, result.HealthScore, 4.0,
 			"go-github should have health > 4.0, got %.2f", result.HealthScore)
 
-		t.Logf("go-github: files=%d score=%.2f grade=%s",
-			result.TotalFiles, result.HealthScore, result.HealthGrade)
+		t.Logf("go-github: files=%d score=%.2f",
+			result.TotalFiles, result.HealthScore)
 	})
 
 	t.Run("Detailed_Modules", func(t *testing.T) {
@@ -257,8 +255,8 @@ func TestCodeInsight_PythonFastAPI(t *testing.T) {
 		assert.Greater(t, result.HealthScore, 4.0,
 			"FastAPI should have good health, got %.2f", result.HealthScore)
 
-		t.Logf("FastAPI: score=%.2f grade=%s files=%d",
-			result.HealthScore, result.HealthGrade, result.TotalFiles)
+		t.Logf("FastAPI: score=%.2f files=%d",
+			result.HealthScore, result.TotalFiles)
 	})
 
 	t.Run("Detailed_PythonModules", func(t *testing.T) {
@@ -302,8 +300,8 @@ func TestCodeInsight_TypeScriptNextJS(t *testing.T) {
 		assert.Greater(t, result.TotalFiles, 100,
 			"NextJS should have > 100 files, got %d", result.TotalFiles)
 
-		t.Logf("NextJS: score=%.2f grade=%s files=%d",
-			result.HealthScore, result.HealthGrade, result.TotalFiles)
+		t.Logf("NextJS: score=%.2f files=%d",
+			result.HealthScore, result.TotalFiles)
 	})
 
 	t.Run("Structure_TypeScriptProject", func(t *testing.T) {
@@ -331,11 +329,9 @@ func TestCodeInsight_Accuracy(t *testing.T) {
 		// Health score should be identical across runs (deterministic calculation)
 		assert.Equal(t, result1.HealthScore, result2.HealthScore,
 			"Health score should be consistent: %.2f vs %.2f", result1.HealthScore, result2.HealthScore)
-		assert.Equal(t, result1.HealthGrade, result2.HealthGrade,
-			"Health grade should be consistent: %s vs %s", result1.HealthGrade, result2.HealthGrade)
 
 		// File count from overview may vary due to output truncation/sampling
-		// Log the difference but don't fail - the important metrics are health score/grade
+		// Log the difference but don't fail - the important metric is health score
 		if result1.TotalFiles != result2.TotalFiles {
 			t.Logf("WARNING: File count differs between runs: %d vs %d (output sizes: %d vs %d bytes)",
 				result1.TotalFiles, result2.TotalFiles, len(result1.Raw), len(result2.Raw))
@@ -343,22 +339,14 @@ func TestCodeInsight_Accuracy(t *testing.T) {
 		}
 	})
 
-	t.Run("Grade_MatchesScore", func(t *testing.T) {
-		result := ctx.CodeInsight("grade_check", mcp.CodeInsightOptions{Mode: "overview"})
+	t.Run("Score_InValidRange", func(t *testing.T) {
+		result := ctx.CodeInsight("score_check", mcp.CodeInsightOptions{Mode: "overview"})
 
-		// Grade should match score range
-		// A: 9-10, B: 7-9, C: 5-7, D: 3-5, F: 0-3
-		if result.HealthScore >= 9.0 {
-			assert.Equal(t, "A", result.HealthGrade, "Score %.2f should be grade A", result.HealthScore)
-		} else if result.HealthScore >= 7.0 {
-			assert.Contains(t, []string{"A", "B"}, result.HealthGrade,
-				"Score %.2f should be grade A or B", result.HealthScore)
-		} else if result.HealthScore >= 5.0 {
-			assert.Contains(t, []string{"B", "C"}, result.HealthGrade,
-				"Score %.2f should be grade B or C", result.HealthScore)
-		}
+		// Score should be in valid range 0-10
+		assert.GreaterOrEqual(t, result.HealthScore, 0.0, "Score should be >= 0")
+		assert.LessOrEqual(t, result.HealthScore, 10.0, "Score should be <= 10")
 
-		t.Logf("Score %.2f -> Grade %s", result.HealthScore, result.HealthGrade)
+		t.Logf("Health score: %.2f", result.HealthScore)
 	})
 
 	t.Run("FileCount_MatchesSearch", func(t *testing.T) {

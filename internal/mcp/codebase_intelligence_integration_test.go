@@ -521,9 +521,6 @@ func BenchmarkQuery(b *testing.B) {
 	if !testContains(content, "score=") {
 		t.Error("Expected health score in output")
 	}
-	if !testContains(content, "grade=") {
-		t.Error("Expected health grade in output")
-	}
 
 	// Domain terms should be found - test files have clear domain vocabulary
 	// Auth terms: Login, Logout, token, AuthService
@@ -727,9 +724,6 @@ func divide(a, b int) int {
 	if !testContains(content, "quality:") {
 		t.Error("Expected quality: line in statistics")
 	}
-	if !testContains(content, "grade=") {
-		t.Error("Expected grade= in quality metrics")
-	}
 
 	// Well-structured simple code should have high maintainability
 	if !testContains(content, "maintainability=") {
@@ -865,9 +859,6 @@ func createMap(keys []string) map[string]int {
 	}
 	if !testContains(content, "score=") {
 		t.Error("Expected health score in output")
-	}
-	if !testContains(content, "grade=") {
-		t.Error("Expected health grade in output")
 	}
 
 	// Memory pressure analysis is disabled due to regex-based allocation detection

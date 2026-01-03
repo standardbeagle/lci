@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -356,31 +355,6 @@ func TestHandleSideEffectsSummaryMode(t *testing.T) {
 	}
 }
 
-func TestCalculatePurityGrade(t *testing.T) {
-	tests := []struct {
-		ratio    float64
-		expected string
-	}{
-		{0.95, "A"},
-		{0.80, "A"},
-		{0.79, "B"},
-		{0.60, "B"},
-		{0.59, "C"},
-		{0.40, "C"},
-		{0.39, "D"},
-		{0.20, "D"},
-		{0.19, "F"},
-		{0.0, "F"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("ratio_%.2f", tt.ratio), func(t *testing.T) {
-			grade := calculatePurityGrade(tt.ratio)
-			assert.Equal(t, tt.expected, grade, "Ratio %.2f should give grade %s", tt.ratio, tt.expected)
-		})
-	}
-}
-
 func TestPuritySummaryType(t *testing.T) {
 	// Test that PuritySummary can be marshaled/unmarshaled correctly
 	summary := &PuritySummary{
@@ -388,7 +362,6 @@ func TestPuritySummaryType(t *testing.T) {
 		PureFunctions:     75,
 		ImpureFunctions:   25,
 		PurityRatio:       0.75,
-		Grade:             "B",
 		WithParamWrites:   10,
 		WithGlobalWrites:  5,
 		WithIOEffects:     8,
@@ -410,7 +383,6 @@ func TestPuritySummaryType(t *testing.T) {
 	assert.Equal(t, summary.TotalFunctions, decoded.TotalFunctions)
 	assert.Equal(t, summary.PureFunctions, decoded.PureFunctions)
 	assert.Equal(t, summary.PurityRatio, decoded.PurityRatio)
-	assert.Equal(t, summary.Grade, decoded.Grade)
 	assert.Equal(t, summary.WithIOEffects, decoded.WithIOEffects)
 	assert.Equal(t, summary.DetailedQuery, decoded.DetailedQuery)
 }

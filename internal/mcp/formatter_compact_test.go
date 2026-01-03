@@ -19,7 +19,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_MemoryAnalysis(t *testing.T
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 8.5,
-			Grade:        "B",
 			Complexity: ComplexityMetrics{
 				AverageCC: 5.2,
 			},
@@ -125,7 +124,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_NoMemoryAnalysis(t *testing
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 9.0,
-			Grade:        "A",
 			Complexity: ComplexityMetrics{
 				AverageCC: 3.5,
 			},
@@ -141,7 +139,7 @@ func TestCompactFormatter_FormatIntelligenceResponse_NoMemoryAnalysis(t *testing
 	}
 
 	// Should still have basic health info
-	if !strings.Contains(output, "score=9.0 grade=A") {
+	if !strings.Contains(output, "score=9.00") {
 		t.Error("Expected basic health score info")
 	}
 }
@@ -156,7 +154,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_EmptyMemoryScores(t *testin
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 9.0,
-			Grade:        "A",
 			Complexity: ComplexityMetrics{
 				AverageCC: 3.5,
 			},
@@ -184,7 +181,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_DetailedSmells(t *testing.T
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 7.5,
-			Grade:        "C",
 			Complexity: ComplexityMetrics{
 				AverageCC: 12.0,
 			},
@@ -243,7 +239,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_ProblematicSymbols(t *testi
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 6.0,
-			Grade:        "D",
 			Complexity: ComplexityMetrics{
 				AverageCC: 18.0,
 			},
@@ -306,7 +301,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_Statistics(t *testing.T) {
 				LowCohesionModules: []string{"legacy_module", "utils_module"},
 			},
 			QualityMetrics: QualityMetrics{
-				Grade:                "B",
 				MaintainabilityIndex: 75.0,
 				TechnicalDebtRatio:   0.05,
 			},
@@ -331,7 +325,7 @@ func TestCompactFormatter_FormatIntelligenceResponse_Statistics(t *testing.T) {
 	if !strings.Contains(output, "cohesion: avg=0.70 min=0.20") {
 		t.Error("Expected cohesion metrics")
 	}
-	if !strings.Contains(output, "quality: grade=B maintainability=75.00") {
+	if !strings.Contains(output, "quality: maintainability=75.00") {
 		t.Error("Expected quality metrics")
 	}
 }
@@ -357,7 +351,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_MemoryAnalysisLimit(t *test
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 7.0,
-			Grade:        "C",
 			Complexity:   ComplexityMetrics{AverageCC: 5.0},
 			MemoryAnalysis: &MemoryPressureAnalysis{
 				Scores: scores,
@@ -407,7 +400,6 @@ func TestCompactFormatter_FormatIntelligenceResponse_HotspotsLimit(t *testing.T)
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 7.0,
-			Grade:        "C",
 			Complexity:   ComplexityMetrics{AverageCC: 5.0},
 			MemoryAnalysis: &MemoryPressureAnalysis{
 				Scores: []MemoryScore{{Function: "test", TotalScore: 10}},
@@ -469,7 +461,6 @@ func TestCompactFormatter_SectionSeparators(t *testing.T) {
 		Tier:         1,
 		HealthDashboard: &HealthDashboard{
 			OverallScore: 9.0,
-			Grade:        "A",
 			Complexity:   ComplexityMetrics{AverageCC: 3.0},
 		},
 		RepositoryMap: &RepositoryMap{
