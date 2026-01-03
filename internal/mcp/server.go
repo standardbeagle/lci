@@ -1683,7 +1683,7 @@ func (s *Server) registerTools() {
 							"x": {
 								Type:        "array",
 								Items:       &jsonschema.Schema{Type: "string"},
-								Description: "Expansion directives: 'callers', 'callees:2', 'implementations', etc.",
+								Description: "Expansion directives: 'callers', 'callees:2' (with purity info), 'implementations', 'tests', etc.",
 							},
 							"role": {Type: "string", Description: "Semantic role: 'modify', 'contract', 'pattern', 'boundary'"},
 							"note": {Type: "string", Description: "Architect annotation (free-form text)"},

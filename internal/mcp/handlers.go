@@ -519,6 +519,59 @@ func (s *Server) handleInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 			"reason": "Functionality is now included in codebase_intelligence with better performance and more comprehensive metrics.",
 		})
 
+	case "context":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "context",
+			"description": "Capture and hydrate code context manifests for agent handoff. Save compact refs, load with full source + call graphs.",
+			"operations": map[string]string{
+				"save": "Create manifest from symbol references",
+				"load": "Hydrate manifest with source code and expansions",
+			},
+			"save_params": map[string]string{
+				"refs":      "REQUIRED: Array of references [{f:'file', s:'symbol', x:['callees']}]",
+				"to_file":   "Write manifest to file (relative to project root)",
+				"to_string": "Return manifest as JSON string",
+				"append":    "Merge with existing manifest",
+				"task":      "Task description for context",
+			},
+			"load_params": map[string]string{
+				"from_file":   "Load manifest from file",
+				"from_string": "Load manifest from inline JSON",
+				"filter":      "Only include these roles",
+				"exclude":     "Exclude these roles",
+				"format":      "'full' (default), 'signatures', 'outline'",
+				"max_tokens":  "Token limit for hydration",
+			},
+			"expansion_directives": map[string]string{
+				"callers":         "Functions that call this symbol",
+				"callees":         "Functions called by this symbol (includes purity info + external deps)",
+				"callees:N":       "Callees with depth N (e.g., 'callees:2')",
+				"implementations": "Types implementing this interface",
+				"interface":       "Interfaces implemented by this type",
+				"tests":           "Test functions for this symbol",
+				"siblings":        "Other methods on same type",
+				"type_deps":       "Types in function signature",
+			},
+			"callees_output": map[string]string{
+				"internal":  "Full source + purity (is_pure, purity_level, categories, reasons)",
+				"external":  "Package.Function signature with is_external=true",
+				"purity":    "Includes transitive side effects from dependencies",
+			},
+			"examples": map[string]interface{}{
+				"save_basic":       `{"operation":"save", "refs":[{"f":"main.go", "s":"handleRequest"}], "to_file":"context.json"}`,
+				"save_with_expand": `{"operation":"save", "refs":[{"f":"api.go", "s":"Process", "x":["callees:2"]}], "to_string":true}`,
+				"load_basic":       `{"operation":"load", "from_file":"context.json"}`,
+				"load_filtered":    `{"operation":"load", "from_file":"context.json", "filter":["modify"], "max_tokens":8000}`,
+			},
+			"roles": map[string]string{
+				"modify":   "Code to be changed",
+				"contract": "Interfaces/types that must be preserved",
+				"pattern":  "Reference implementations to follow",
+				"boundary": "API boundaries not to break",
+			},
+			"performance": "<10ms save, <50ms load with expansions",
+		})
+
 	case "find_files", "files":
 		return createJSONResponse(map[string]interface{}{
 			"name":        "find_files",
@@ -573,6 +626,7 @@ func (s *Server) handleInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 				"search - semantic code search",
 				"files - file/path search with fuzzy matching",
 				"get_context - detailed context for results",
+				"context - save/load code manifests with callees+purity",
 				"semantic_annotations - find code by semantic tags",
 				"code_insight - comprehensive codebase analysis (includes git analysis modes)",
 				"info [tool] - help for specific tool (use 'info version' for server info)",

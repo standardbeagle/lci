@@ -13,18 +13,30 @@ import (
 
 // ExpansionEngine handles expansion of context references into full hydrated context
 type ExpansionEngine struct {
-	refTracker  *core.ReferenceTracker
-	fileService *core.FileService
-	index       interface{} // MasterIndex for lookups
+	refTracker           *core.ReferenceTracker
+	fileService          *core.FileService
+	index                interface{} // MasterIndex for lookups
+	sideEffectPropagator interface{} // SideEffectPropagator for purity analysis
 }
 
 // NewExpansionEngine creates a new expansion engine
 func NewExpansionEngine(refTracker *core.ReferenceTracker, index interface{}) *ExpansionEngine {
-	return &ExpansionEngine{
+	engine := &ExpansionEngine{
 		refTracker:  refTracker,
 		fileService: core.NewFileService(),
 		index:       index,
 	}
+
+	// Try to get the side effect propagator from the index
+	if index != nil {
+		if indexWithPropagator, ok := index.(interface {
+			GetSideEffectPropagator() *core.SideEffectPropagator
+		}); ok {
+			engine.sideEffectPropagator = indexWithPropagator.GetSideEffectPropagator()
+		}
+	}
+
+	return engine
 }
 
 // ParseExpansionDirective parses an expansion directive like "callers:2"
@@ -400,6 +412,7 @@ func (e *ExpansionEngine) expandCallers(
 }
 
 // expandCallees expands to functions that this symbol calls
+// Returns internal callees with purity info, and external dependencies separately
 func (e *ExpansionEngine) expandCallees(
 	ctx context.Context,
 	ref types.ContextRef,
@@ -429,14 +442,25 @@ func (e *ExpansionEngine) expandCallees(
 
 	// Get callees at current depth - fetch first for capacity calculation
 	calleeIDs := e.refTracker.GetCalleeSymbols(symbolID)
-	if len(calleeIDs) == 0 {
+
+	// Get side effect info for the parent symbol to find external dependencies
+	parentSideEffects := e.getSideEffectInfo(symbolID)
+
+	// Calculate capacity hint
+	externalCount := 0
+	if parentSideEffects != nil {
+		externalCount = len(parentSideEffects.ExternalCalls)
+	}
+
+	if len(calleeIDs) == 0 && externalCount == 0 {
 		return nil, nil
 	}
 
-	// Pre-allocate with capacity hint
-	results := make([]types.HydratedRef, 0, len(calleeIDs))
+	// Pre-allocate with capacity hint (internal + external)
+	results := make([]types.HydratedRef, 0, len(calleeIDs)+externalCount)
 	totalTokens := 0
 
+	// Process internal callees (symbols in our codebase)
 	for _, calleeID := range calleeIDs {
 		if totalTokens >= remainingTokens {
 			break // Token budget exceeded
@@ -487,6 +511,10 @@ func (e *ExpansionEngine) expandCallees(
 			continue // Skip on error
 		}
 
+		// Add purity info for internal callee
+		hydratedCallee.Purity = e.getPurityInfo(calleeID)
+		hydratedCallee.IsExternal = false
+
 		totalTokens += tokens
 		results = append(results, *hydratedCallee)
 
@@ -503,6 +531,51 @@ func (e *ExpansionEngine) expandCallees(
 					totalTokens += len(nested.Source) / 4
 				}
 			}
+		}
+	}
+
+	// Add external dependencies (calls to functions outside our codebase)
+	if parentSideEffects != nil && len(parentSideEffects.ExternalCalls) > 0 {
+		for _, extCall := range parentSideEffects.ExternalCalls {
+			if totalTokens >= remainingTokens {
+				break
+			}
+
+			// Create a minimal HydratedRef for external dependency
+			externalRef := types.HydratedRef{
+				Symbol:     extCall.FunctionName,
+				IsExternal: true,
+				Lines:      types.LineRange{Start: extCall.Line, End: extCall.Line},
+			}
+
+			// Set file to package name if available
+			if extCall.Package != "" {
+				externalRef.File = extCall.Package
+			}
+
+			// Create purity info for external call
+			// External calls are assumed impure unless we have specific knowledge
+			externalRef.Purity = &types.PurityInfo{
+				IsPure:      false,
+				PurityLevel: "ExternalDependency",
+				Categories:  []string{"external_call"},
+			}
+
+			// Add reason if available
+			if extCall.Reason != "" {
+				externalRef.Purity.Reasons = []string{extCall.Reason}
+			}
+
+			// Add signature hint from the call
+			if extCall.IsMethod && extCall.ReceiverType != "" {
+				externalRef.Signature = fmt.Sprintf("(%s).%s", extCall.ReceiverType, extCall.FunctionName)
+			} else if extCall.Package != "" {
+				externalRef.Signature = fmt.Sprintf("%s.%s", extCall.Package, extCall.FunctionName)
+			} else {
+				externalRef.Signature = extCall.FunctionName
+			}
+
+			results = append(results, externalRef)
 		}
 	}
 
@@ -1378,4 +1451,120 @@ func (e *ExpansionEngine) extractSignatureOnly(hydratedRef *types.HydratedRef) {
 		hydratedRef.Signature = trimmed
 		break
 	}
+}
+
+// getPurityInfo returns purity information for a symbol ID
+func (e *ExpansionEngine) getPurityInfo(symbolID types.SymbolID) *types.PurityInfo {
+	if e.sideEffectPropagator == nil {
+		return nil
+	}
+
+	// Try to get side effect info from the propagator
+	propagator, ok := e.sideEffectPropagator.(interface {
+		GetSideEffectInfo(types.SymbolID) *types.SideEffectInfo
+	})
+	if !ok {
+		return nil
+	}
+
+	info := propagator.GetSideEffectInfo(symbolID)
+	if info == nil {
+		return nil
+	}
+
+	// Convert SideEffectInfo to PurityInfo
+	purity := &types.PurityInfo{
+		IsPure:      info.IsPure,
+		PurityLevel: info.PurityLevel.String(),
+		PurityScore: info.PurityScore,
+	}
+
+	// Add side effect categories
+	purity.Categories = categoriesToStringSlice(info.Categories)
+
+	// Add transitive categories if present
+	if info.TransitiveCategories != types.SideEffectNone {
+		transitiveCategories := categoriesToStringSlice(info.TransitiveCategories)
+		for _, cat := range transitiveCategories {
+			// Add with "transitive:" prefix to distinguish
+			purity.Categories = append(purity.Categories, "transitive:"+cat)
+		}
+	}
+
+	// Add reasons for impurity
+	if len(info.ImpurityReasons) > 0 {
+		purity.Reasons = info.ImpurityReasons
+	}
+
+	return purity
+}
+
+// getSideEffectInfo returns the full side effect info for a symbol (used for external calls)
+func (e *ExpansionEngine) getSideEffectInfo(symbolID types.SymbolID) *types.SideEffectInfo {
+	if e.sideEffectPropagator == nil {
+		return nil
+	}
+
+	propagator, ok := e.sideEffectPropagator.(interface {
+		GetSideEffectInfo(types.SymbolID) *types.SideEffectInfo
+	})
+	if !ok {
+		return nil
+	}
+
+	return propagator.GetSideEffectInfo(symbolID)
+}
+
+// categoriesToStringSlice converts SideEffectCategory bitfield to string slice
+func categoriesToStringSlice(cat types.SideEffectCategory) []string {
+	if cat == types.SideEffectNone {
+		return nil
+	}
+
+	var result []string
+
+	if cat&types.SideEffectParamWrite != 0 {
+		result = append(result, "param_write")
+	}
+	if cat&types.SideEffectReceiverWrite != 0 {
+		result = append(result, "receiver_write")
+	}
+	if cat&types.SideEffectGlobalWrite != 0 {
+		result = append(result, "global_write")
+	}
+	if cat&types.SideEffectClosureWrite != 0 {
+		result = append(result, "closure_write")
+	}
+	if cat&types.SideEffectFieldWrite != 0 {
+		result = append(result, "field_write")
+	}
+	if cat&types.SideEffectIO != 0 {
+		result = append(result, "io")
+	}
+	if cat&types.SideEffectDatabase != 0 {
+		result = append(result, "database")
+	}
+	if cat&types.SideEffectNetwork != 0 {
+		result = append(result, "network")
+	}
+	if cat&types.SideEffectThrow != 0 {
+		result = append(result, "throw")
+	}
+	if cat&types.SideEffectChannel != 0 {
+		result = append(result, "channel")
+	}
+	if cat&types.SideEffectAsync != 0 {
+		result = append(result, "async")
+	}
+	if cat&types.SideEffectExternalCall != 0 {
+		result = append(result, "external_call")
+	}
+	if cat&types.SideEffectDynamicCall != 0 {
+		result = append(result, "dynamic_call")
+	}
+	if cat&types.SideEffectReflection != 0 {
+		result = append(result, "reflection")
+	}
+
+	return result
 }

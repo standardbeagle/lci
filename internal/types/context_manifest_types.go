@@ -101,6 +101,19 @@ type HydratedRef struct {
 	// Context quality indicators
 	IsExported  bool `json:"is_exported,omitempty"`
 	IsGenerated bool `json:"is_generated,omitempty"` // Generated code (warn agent)
+
+	// Purity analysis (for callees/dependencies)
+	Purity     *PurityInfo `json:"purity,omitempty"`      // Purity info for this symbol
+	IsExternal bool        `json:"is_external,omitempty"` // True if external dependency (not in codebase)
+}
+
+// PurityInfo contains purity analysis for a function
+type PurityInfo struct {
+	IsPure      bool     `json:"is_pure"`                 // True if function has no side effects
+	PurityLevel string   `json:"purity_level,omitempty"`  // "Pure", "InternallyPure", "ObjectState", "ModuleGlobal", "ExternalDependency"
+	Categories  []string `json:"categories,omitempty"`    // Side effect categories (e.g., "io", "param_write")
+	PurityScore float64  `json:"purity_score,omitempty"`  // 0.0-1.0
+	Reasons     []string `json:"reasons,omitempty"`       // Why it's impure
 }
 
 // HydrationStats provides statistics about the hydration process
