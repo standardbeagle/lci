@@ -108,17 +108,17 @@ func (v *Validator) validateSearchConfig(search *Search) error {
 // setSmartDefaults applies smart defaults based on system capabilities
 func (v *Validator) setSmartDefaults(cfg *Config) {
 	// Set default MaxGoroutines based on CPU count if not configured
-	// Use cores-1 to leave headroom for the system, minimum of 1
+	// Use full CPU count - indexing is I/O bound and benefits from full parallelism
 	if cfg.Performance.MaxGoroutines == 0 {
 		numCPU := runtime.NumCPU()
-		cfg.Performance.MaxGoroutines = max(1, numCPU-1)
+		cfg.Performance.MaxGoroutines = max(1, numCPU)
 	}
 
-	// Set default parallel workers to cores-1 to prevent overwhelming the system
-	// This leaves one core free for the OS and other applications
+	// Set default parallel workers to full CPU count
+	// Indexing is I/O bound (file reads, parsing) and benefits from full parallelism
 	if cfg.Performance.ParallelFileWorkers == 0 {
 		numCPU := runtime.NumCPU()
-		cfg.Performance.ParallelFileWorkers = max(1, numCPU-1)
+		cfg.Performance.ParallelFileWorkers = max(1, numCPU)
 	}
 
 	// Set default memory limit based on available memory if not configured

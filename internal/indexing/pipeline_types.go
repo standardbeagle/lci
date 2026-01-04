@@ -70,6 +70,7 @@ type ProcessedFile struct {
 	EnhancedSymbols  []types.EnhancedSymbol      // Enhanced symbols with complexity data
 	References       []types.Reference           // extracted references
 	Scopes           []types.ScopeInfo           // scope information
+	ScopeChains      [][]types.ScopeInfo         // Pre-computed scope chains per symbol (indexed same as Symbols)
 	BucketedTrigrams *core.BucketedTrigramResult // Pre-sharded trigrams for lock-free merging
 	Content          []byte                      // file content for metrics calculation
 	LineOffsets      []int                       // precomputed line boundaries for O(1) line access

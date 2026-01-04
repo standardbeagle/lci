@@ -26,13 +26,17 @@ type SymbolStore struct {
 	// Fast lookup: SymbolID → array index
 	// Protected by caller's lock (e.g., ReferenceTracker.mu)
 	index map[types.SymbolID]int
+
+	// Reverse lookup: array index → SymbolID (for O(1) Range iteration)
+	reverseIndex []types.SymbolID
 }
 
 // NewSymbolStore creates a new SymbolStore with pre-allocated capacity
 func NewSymbolStore(expectedSize int) *SymbolStore {
 	return &SymbolStore{
-		data:  make([]*types.EnhancedSymbol, 0, expectedSize),
-		index: make(map[types.SymbolID]int, expectedSize*2), // 2x for growth headroom
+		data:         make([]*types.EnhancedSymbol, 0, expectedSize),
+		index:        make(map[types.SymbolID]int, expectedSize*2), // 2x for growth headroom
+		reverseIndex: make([]types.SymbolID, 0, expectedSize),
 	}
 }
 
@@ -66,6 +70,7 @@ func (ss *SymbolStore) Set(id types.SymbolID, symbol *types.EnhancedSymbol) {
 	// Add new symbol
 	ss.index[id] = len(ss.data)
 	ss.data = append(ss.data, symbol)
+	ss.reverseIndex = append(ss.reverseIndex, id)
 }
 
 // Delete removes a symbol by ID
@@ -80,14 +85,16 @@ func (ss *SymbolStore) Delete(id types.SymbolID) bool {
 
 	// Get the last element
 	lastIdx := len(ss.data) - 1
-	lastID := ss.data[lastIdx].ID
+	lastID := ss.reverseIndex[lastIdx]
 
-	// Move last element to deleted position
+	// Move last element to deleted position (swap-and-delete)
 	ss.data[idx] = ss.data[lastIdx]
+	ss.reverseIndex[idx] = lastID
 	ss.index[lastID] = idx
 
-	// Remove last element from array
+	// Remove last element from arrays
 	ss.data = ss.data[:lastIdx]
+	ss.reverseIndex = ss.reverseIndex[:lastIdx]
 
 	// Remove from index
 	delete(ss.index, id)
@@ -119,20 +126,11 @@ func (ss *SymbolStore) GetAll() []*types.EnhancedSymbol {
 //
 // NOTE: Assumes caller holds appropriate lock (e.g., ReferenceTracker.mu)
 func (ss *SymbolStore) Range(fn func(id types.SymbolID, symbol *types.EnhancedSymbol) bool) {
+	// O(n) iteration using reverseIndex for direct ID lookup
 	for idx, symbol := range ss.data {
-		// Reconstruct ID from index
-		// We need to iterate through the index map to get the ID
-		// But that's inefficient... Let's add a reverse index
-
-		// Actually, we can iterate directly:
-		// We need a way to get ID from index. Let's iterate through index map instead.
-		for id, dataIdx := range ss.index {
-			if dataIdx == idx {
-				if !fn(id, symbol) {
-					return
-				}
-				break
-			}
+		id := ss.reverseIndex[idx]
+		if !fn(id, symbol) {
+			return
 		}
 	}
 }

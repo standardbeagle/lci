@@ -224,6 +224,33 @@ func (fp *FileProcessor) processFile(ctx context.Context, workerID int, task Fil
 	// String interning is done globally in FileIntegrator, not per-file
 	// This avoids double allocation (per-file + global)
 
+	// PRE-MERGE OPTIMIZATION: Build scope chains in parallel map phase
+	// This moves O(n × s) work from single-threaded reduce to parallel map phase
+	// where n=symbols, s=scopes. Each worker builds chains independently.
+	// Uses per-file caching to avoid rebuilding identical chains for symbols at same line.
+	var scopeChains [][]types.ScopeInfo
+	if len(symbols) > 0 && len(scopes) > 0 {
+		scopeChains = make([][]types.ScopeInfo, len(symbols))
+		// Cache scope chains by line number - symbols on same line have same chain
+		lineCache := make(map[int][]types.ScopeInfo, len(symbols)/4+1)
+		for i, symbol := range symbols {
+			// Check cache first
+			if cached, ok := lineCache[symbol.Line]; ok {
+				scopeChains[i] = cached
+				continue
+			}
+			// Pre-allocate with capacity of 4 - most symbols match 1-3 scopes
+			chain := make([]types.ScopeInfo, 0, 4)
+			for _, scope := range scopes {
+				if scope.StartLine <= symbol.Line && (scope.EndLine == 0 || scope.EndLine >= symbol.Line) {
+					chain = append(chain, scope)
+				}
+			}
+			scopeChains[i] = chain
+			lineCache[symbol.Line] = chain
+		}
+	}
+
 	// Pre-compute trigrams in parallel processors using bucketed format only
 	// OPTIMIZATION: Bucketed format enables lock-free merging and eliminates duplicate generation
 	var bucketedTrigrams *core.BucketedTrigramResult
@@ -276,6 +303,7 @@ func (fp *FileProcessor) processFile(ctx context.Context, workerID int, task Fil
 	result.EnhancedSymbols = enhancedSymbols // Includes complexity data from parser
 	result.References = references
 	result.Scopes = scopes
+	result.ScopeChains = scopeChains // Pre-built in map phase for lock-free reduce
 	result.Content = content                               // Keep content for integrator compatibility
 	result.LineOffsets = types.ComputeLineOffsets(content) // Precompute for O(1) line access
 	result.AST = ast

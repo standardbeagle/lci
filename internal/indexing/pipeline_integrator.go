@@ -412,8 +412,9 @@ func (fi *FileIntegrator) IntegrateFiles(ctx context.Context, resultChan <-chan 
 				var enhancedSymbols []types.EnhancedSymbol
 				if fi.refTracker != nil {
 					fi.refTracker.ProcessFileImports(fileID, result.Path, result.Content)
-					// Use ProcessFileWithEnhanced to propagate complexity data from parser
-					enhancedSymbols = fi.refTracker.ProcessFileWithEnhanced(fileID, result.Path, result.Symbols, result.EnhancedSymbols, result.References, result.Scopes)
+					// Use ProcessFileWithScopeChains to propagate complexity data and use pre-built scope chains
+					// Pre-built scope chains from map phase eliminate O(n × s) reduce-phase work
+					enhancedSymbols = fi.refTracker.ProcessFileWithScopeChains(fileID, result.Path, result.Symbols, result.EnhancedSymbols, result.References, result.Scopes, result.ScopeChains)
 					// Store performance data for code_insight anti-pattern detection
 					if len(result.PerfData) > 0 {
 						fi.refTracker.StorePerfData(fileID, result.PerfData)

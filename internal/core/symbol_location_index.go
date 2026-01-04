@@ -1,8 +1,6 @@
 package core
 
 import (
-	"fmt"
-	"hash/fnv"
 	"sync"
 	"sync/atomic"
 
@@ -93,29 +91,20 @@ func (sli *SymbolLocationIndex) IndexFileSymbols(fileID types.FileID, symbols []
 		lineIndex:     make(map[int]*LineSymbolIndex),
 	}
 
-	// Build a map from symbol properties to ID for fast lookup
-	symbolIDMap := make(map[string]types.SymbolID)
-	if enhancedSymbols != nil {
-		for _, enhanced := range enhancedSymbols {
-			if enhanced != nil {
-				key := fmt.Sprintf("%s:%d:%d:%d:%d", enhanced.Name, enhanced.Line, enhanced.Column, enhanced.EndLine, enhanced.EndColumn)
-				symbolIDMap[key] = enhanced.ID
-			}
-		}
-	}
-
 	// Index each symbol by its position
-	for _, symbol := range symbols {
-		// Look up the symbol ID
+	// OPTIMIZATION: Use index-based matching instead of fmt.Sprintf key lookup
+	// Symbols and enhancedSymbols arrays are in the same order (from parser/processor)
+	// This eliminates 2n allocations per file from fmt.Sprintf
+	for i, symbol := range symbols {
+		// Get symbol ID directly from enhanced symbols array by index
+		// This is O(1) with zero allocations vs O(n) map lookups with string allocations
 		var symbolID types.SymbolID
-		key := fmt.Sprintf("%s:%d:%d:%d:%d", symbol.Name, symbol.Line, symbol.Column, symbol.EndLine, symbol.EndColumn)
-		if id, found := symbolIDMap[key]; found {
-			symbolID = id
+		if enhancedSymbols != nil && i < len(enhancedSymbols) && enhancedSymbols[i] != nil {
+			symbolID = enhancedSymbols[i].ID
 		} else {
-			// Fallback: generate a temporary ID based on the symbol (shouldn't happen in normal operation)
-			hash := fnv.New64a()
-			hash.Write([]byte(key))
-			symbolID = types.SymbolID(hash.Sum64())
+			// Fallback: generate a temporary ID based on position (shouldn't happen in normal operation)
+			// Use bit-packing instead of hash for faster computation
+			symbolID = types.SymbolID(uint64(symbol.Line)<<32 | uint64(symbol.Column)<<16 | uint64(i))
 		}
 
 		positioned := PositionedSymbol{

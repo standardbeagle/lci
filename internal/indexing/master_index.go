@@ -198,8 +198,8 @@ func NewMasterIndex(cfg *config.Config) *MasterIndex {
 	// Initialize pipeline components with validated configuration
 	numWorkers := cfg.Performance.ParallelFileWorkers
 	if numWorkers <= 0 {
-		// Use cores-1 to leave headroom for the system, minimum of 1
-		numWorkers = max(1, runtime.NumCPU()-1)
+		// Use full CPU count - indexing is I/O bound, can use all cores
+		numWorkers = max(1, runtime.NumCPU())
 	}
 	mi.fileScanner = NewFileScanner(cfg, numWorkers*2)
 	mi.fileProcessor = NewFileProcessorWithService(cfg, mi.fileService)
@@ -213,8 +213,10 @@ func NewMasterIndex(cfg *config.Config) *MasterIndex {
 	// Note: Universal Symbol Graph removed (no longer supported)
 	// Set config for feature flags
 	mi.fileIntegrator.SetConfig(mi.config)
-	// Enable lock-free merger pipeline for parallel trigram indexing (16 merger goroutines)
-	mi.fileIntegrator.EnableMergerPipeline(16)
+	// Enable lock-free merger pipeline for parallel trigram indexing
+	// Scale merger count with CPU: minimum 16, scales up for high-core systems
+	mergerCount := max(16, runtime.NumCPU()*2)
+	mi.fileIntegrator.EnableMergerPipeline(mergerCount)
 
 	// Initialize GraphPropagator now that all dependencies are set up
 	if mi.graphPropagator == nil {
@@ -418,7 +420,8 @@ func (mi *MasterIndex) IndexDirectory(ctx context.Context, root string) error {
 	// CRITICAL: Re-enable merger pipeline if it was previously enabled
 	// Create a NEW pipeline with the new trigram index (old storage is now invalid)
 	if wasUsingMergerPipeline {
-		mi.fileIntegrator.EnableMergerPipeline(16)
+		mergerCount := max(16, runtime.NumCPU()*2)
+		mi.fileIntegrator.EnableMergerPipeline(mergerCount)
 	}
 
 	// Start pipeline components with validated coordination
@@ -528,8 +531,8 @@ func (mi *MasterIndex) runFileProcessor(ctx context.Context, taskChan <-chan Fil
 
 	numWorkers := mi.config.Performance.ParallelFileWorkers
 	if numWorkers <= 0 {
-		// Use cores-1 to leave headroom for the system, minimum of 1
-		numWorkers = max(1, runtime.NumCPU()-1)
+		// Use full CPU count - indexing is I/O bound, can use all cores
+		numWorkers = max(1, runtime.NumCPU())
 	}
 
 	// Track processors with a local waitgroup for proper cleanup
@@ -938,67 +941,69 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 
 	debug.LogIndexing("Updating file: %s (%d bytes)\n", path, len(content))
 
-	// Invalidate old file and create new one with fresh FileID
-	// This ensures immutability of FileIDs and proper cache invalidation
-
-	// Get old file information from current snapshot
+	// Get old file information and remove if exists
 	currentSnapshot := mi.fileSnapshot.Load()
 	oldFileID, exists := currentSnapshot.fileMap[path]
-	var oldContent []byte
 
 	if exists {
-		// Get old content for trigram removal
-		if oldContentBytes, ok := mi.fileContentStore.GetContent(oldFileID); ok {
-			oldContent = oldContentBytes
-		}
-	}
-
-	if exists {
-		// Mark old file as deleted immediately for search filtering
-		// This ensures concurrent searches won't return stale results from the old FileID
-		if mi.deletedFileTracker != nil {
-			mi.deletedFileTracker.MarkDeleted(oldFileID)
-		}
-
-		// Invalidate old file content and references BEFORE creating new FileID
-		// This prevents memory leaks by ensuring proper cleanup order
-		mi.fileContentStore.InvalidateFile(path)
-
-		// Remove from all index components in the correct order
-		if mi.trigramIndex != nil && oldContent != nil {
-			mi.trigramIndex.RemoveFile(oldFileID, oldContent)
-		}
-		if mi.postingsIndex != nil {
-			mi.postingsIndex.RemoveFile(oldFileID)
-		}
-		if mi.symbolIndex != nil {
-			mi.symbolIndex.RemoveFileSymbols(oldFileID)
-		}
-		if mi.refTracker != nil {
-			mi.refTracker.RemoveFile(oldFileID)
-		}
-		if mi.symbolLocationIndex != nil {
-			mi.symbolLocationIndex.RemoveFile(oldFileID)
-		}
-		// CallGraph.RemoveFile removed - RefTracker handles cleanup
-
-		debug.LogIndexing("Invalidated old file: %s (oldFileID: %d)\n", path, oldFileID)
+		mi.removeOldFileFromIndexes(oldFileID, path)
 	}
 
 	// Load content into FileContentStore through FileService for consistency
 	fileID := mi.fileService.LoadFileFromMemory(path, content)
 
-	// CRITICAL: Capture oldFileID in closure to avoid race conditions
-	oldFileIDForClosure := oldFileID
-	existsForClosure := exists
+	// Update file mapping with copy-on-write
+	mi.updateSnapshotForFile(path, fileID, oldFileID, exists)
 
-	// Update file mapping with copy-on-write (we already hold snapshotMu lock)
-	// NOTE: We already hold the snapshotMu lock from line 932, so we can't call
-	// updateSnapshotAtomic as it would try to acquire the lock again (deadlock!)
-	//
-	// OPTIMIZATION: We only modify 1-2 entries (remove old, add new), so we can
-	// create a new snapshot that shares the maps with the old snapshot, then
-	// selectively copy only the maps we need to modify.
+	// Index new file content
+	mi.indexNewFileContent(path, fileID, content)
+
+	return nil
+}
+
+// removeOldFileFromIndexes removes an existing file from all index components.
+// Precondition: Write locks must be held for all index types.
+// Precondition: snapshotMu should be held by caller for snapshot consistency.
+func (mi *MasterIndex) removeOldFileFromIndexes(oldFileID types.FileID, path string) {
+	// Get old content for trigram removal
+	var oldContent []byte
+	if oldContentBytes, ok := mi.fileContentStore.GetContent(oldFileID); ok {
+		oldContent = oldContentBytes
+	}
+
+	// Mark old file as deleted immediately for search filtering
+	// This ensures concurrent searches won't return stale results from the old FileID
+	if mi.deletedFileTracker != nil {
+		mi.deletedFileTracker.MarkDeleted(oldFileID)
+	}
+
+	// Invalidate old file content and references BEFORE creating new FileID
+	// This prevents memory leaks by ensuring proper cleanup order
+	mi.fileContentStore.InvalidateFile(path)
+
+	// Remove from all index components in the correct order
+	if mi.trigramIndex != nil && oldContent != nil {
+		mi.trigramIndex.RemoveFile(oldFileID, oldContent)
+	}
+	if mi.postingsIndex != nil {
+		mi.postingsIndex.RemoveFile(oldFileID)
+	}
+	if mi.symbolIndex != nil {
+		mi.symbolIndex.RemoveFileSymbols(oldFileID)
+	}
+	if mi.refTracker != nil {
+		mi.refTracker.RemoveFile(oldFileID)
+	}
+	if mi.symbolLocationIndex != nil {
+		mi.symbolLocationIndex.RemoveFile(oldFileID)
+	}
+
+	debug.LogIndexing("Invalidated old file: %s (oldFileID: %d)\n", path, oldFileID)
+}
+
+// updateSnapshotForFile updates the file snapshot with new file mapping using copy-on-write.
+// Precondition: snapshotMu must be held by caller.
+func (mi *MasterIndex) updateSnapshotForFile(path string, newFileID, oldFileID types.FileID, exists bool) {
 	oldSnapshot := mi.fileSnapshot.Load()
 
 	// Strategy: Create new snapshot with shared map references initially,
@@ -1008,14 +1013,9 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 		fileMap:        oldSnapshot.fileMap,        // Share initially
 		reverseFileMap: oldSnapshot.reverseFileMap, // Share initially
 		fileScopes:     oldSnapshot.fileScopes,     // Share initially
-		// fileCache removed - use FileContentStore instead
 	}
 
-	// Copy-on-write: Only copy maps we need to modify
-	// Case 1: Updating existing file (remove old entry, add new entry)
-	// Case 2: Adding new file (only add new entry)
-
-	if existsForClosure {
+	if exists {
 		// Updating existing file - need to remove old FileID and add new one
 		// Copy all three maps since we're modifying all of them
 		newSnapshot.fileMap = copyMapStringToFileID(oldSnapshot.fileMap)
@@ -1024,28 +1024,29 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 
 		// Remove old file mappings
 		delete(newSnapshot.fileMap, path)
-		delete(newSnapshot.reverseFileMap, oldFileIDForClosure)
-		delete(newSnapshot.fileScopes, oldFileIDForClosure)
+		delete(newSnapshot.reverseFileMap, oldFileID)
+		delete(newSnapshot.fileScopes, oldFileID)
 
 		// Add new file mappings
-		newSnapshot.fileMap[path] = fileID
-		newSnapshot.reverseFileMap[fileID] = path
-		// Note: fileScopes will be updated later after parsing
+		newSnapshot.fileMap[path] = newFileID
+		newSnapshot.reverseFileMap[newFileID] = path
 	} else {
 		// Adding new file - only need to add new entry
 		// Only copy fileMap and reverseFileMap (we're adding to them)
 		newSnapshot.fileMap = copyMapStringToFileID(oldSnapshot.fileMap)
 		newSnapshot.reverseFileMap = copyMapFileIDToString(oldSnapshot.reverseFileMap)
-		// fileScopes can be shared until we need to add scopes
 
 		// Add new file mappings
-		newSnapshot.fileMap[path] = fileID
-		newSnapshot.reverseFileMap[fileID] = path
-		// Note: fileScopes will be copied when we need to add scopes
+		newSnapshot.fileMap[path] = newFileID
+		newSnapshot.reverseFileMap[newFileID] = path
 	}
 
 	mi.fileSnapshot.Store(newSnapshot)
+}
 
+// indexNewFileContent performs indexing operations on new file content.
+// Precondition: Write locks must be held for all index types.
+func (mi *MasterIndex) indexNewFileContent(path string, fileID types.FileID, content []byte) {
 	// Index file path for file search
 	mi.fileSearchEngine.IndexFile(fileID, path)
 
@@ -1056,12 +1057,14 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 
 	// Index trigrams
 	mi.trigramIndex.IndexFile(fileID, content)
+
 	// Index minimal postings for fast word lookups
 	if mi.postingsIndex != nil {
 		mi.postingsIndex.IndexFile(fileID, content)
 	}
-	// Heuristic include resolution (outside postingsIndex guard)
-	if strings.HasSuffix(path, ".c") || strings.HasSuffix(path, ".cc") || strings.HasSuffix(path, ".cpp") || strings.HasSuffix(path, ".h") || strings.HasSuffix(path, ".hpp") {
+
+	// Heuristic include resolution for C/C++ files
+	if mi.isCppFile(path) {
 		mi.resolveIncludesHeuristic(fileID, path, content)
 	}
 
@@ -1080,12 +1083,11 @@ func (mi *MasterIndex) UpdateFile(path string, content []byte) error {
 
 	atomic.AddInt64(&mi.processedFiles, 1)
 	debug.LogIndexing("Updated file: %s (fileID: %d, symbols: %d)\n", path, fileID, len(symbols))
+
 	// Log symbol names for debugging
 	for _, sym := range symbols {
 		debug.LogIndexing("  Symbol: %s (type: %v)\n", sym.Name, sym.Type)
 	}
-
-	return nil
 }
 
 func (mi *MasterIndex) RemoveFile(path string) error {
@@ -2374,11 +2376,46 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 		"metrics":  map[string]interface{}{},
 	}
 
-	errors := []string{}
-	warnings := []string{}
-	metrics := map[string]interface{}{}
+	var errors, warnings []string
+	metrics := mi.collectHealthMetrics()
 
-	// Check core component initialization
+	// Validate components
+	errors = append(errors, mi.validateComponents()...)
+
+	// Validate snapshot consistency
+	snapErrors, snapWarnings := mi.validateSnapshotConsistency(metrics)
+	errors = append(errors, snapErrors...)
+	warnings = append(warnings, snapWarnings...)
+
+	// Validate index consistency
+	warnings = append(warnings, mi.validateIndexConsistency(metrics)...)
+
+	// Check memory pressure
+	memErrors, memWarnings := mi.checkMemoryPressure(metrics)
+	errors = append(errors, memErrors...)
+	warnings = append(warnings, memWarnings...)
+
+	// Check for potential race conditions
+	isIndexing, _ := metrics["is_indexing"].(bool)
+	searchCount, _ := metrics["search_count"].(int64)
+	if isIndexing && searchCount > 0 {
+		warnings = append(warnings, "search operations performed during indexing (potential race condition)")
+	}
+
+	// Determine overall health status
+	health["status"] = mi.determineHealthStatus(errors, warnings)
+	health["errors"] = errors
+	health["warnings"] = warnings
+	health["metrics"] = metrics
+
+	mi.logHealthCheckResults(health)
+	return health
+}
+
+// validateComponents checks core component initialization and returns errors
+func (mi *MasterIndex) validateComponents() []string {
+	var errors []string
+
 	components := map[string]interface{}{
 		"trigram_index":         mi.trigramIndex,
 		"symbol_index":          mi.symbolIndex,
@@ -2396,7 +2433,13 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 		}
 	}
 
-	// Check atomic counters
+	return errors
+}
+
+// collectHealthMetrics gathers atomic counters and returns metrics map
+func (mi *MasterIndex) collectHealthMetrics() map[string]interface{} {
+	metrics := map[string]interface{}{}
+
 	totalFiles := atomic.LoadInt64(&mi.totalFiles)
 	processedFiles := atomic.LoadInt64(&mi.processedFiles)
 	isIndexing := atomic.LoadInt32(&mi.isIndexing)
@@ -2407,36 +2450,52 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 	metrics["is_indexing"] = isIndexing == 1
 	metrics["search_count"] = searchCount
 
-	// Check file snapshot consistency
+	return metrics
+}
+
+// validateSnapshotConsistency checks file snapshot mappings and returns errors/warnings
+func (mi *MasterIndex) validateSnapshotConsistency(metrics map[string]interface{}) ([]string, []string) {
+	var errors, warnings []string
+
 	snapshot := mi.fileSnapshot.Load()
 	if snapshot == nil {
 		errors = append(errors, "file snapshot is nil")
-	} else {
-		snapshotFileCount := len(snapshot.fileMap)
-		reverseFileCount := len(snapshot.reverseFileMap)
-
-		metrics["snapshot_files"] = snapshotFileCount
-		metrics["reverse_snapshot_files"] = reverseFileCount
-
-		if snapshotFileCount != reverseFileCount {
-			errors = append(errors, fmt.Sprintf("file snapshot inconsistency: %d forward mappings, %d reverse mappings",
-				snapshotFileCount, reverseFileCount))
-		}
-
-		// Check for FileID mismatches
-		mismatches := 0
-		for fileID, path := range snapshot.reverseFileMap {
-			if mappedFileID, exists := snapshot.fileMap[path]; !exists || mappedFileID != fileID {
-				mismatches++
-			}
-		}
-		if mismatches > 0 {
-			errors = append(errors, fmt.Sprintf("found %d FileID mapping inconsistencies", mismatches))
-		}
-		metrics["fileid_mismatches"] = mismatches
+		return errors, warnings
 	}
 
-	// Check index component consistency (only if components are initialized)
+	snapshotFileCount := len(snapshot.fileMap)
+	reverseFileCount := len(snapshot.reverseFileMap)
+
+	metrics["snapshot_files"] = snapshotFileCount
+	metrics["reverse_snapshot_files"] = reverseFileCount
+
+	if snapshotFileCount != reverseFileCount {
+		errors = append(errors, fmt.Sprintf("file snapshot inconsistency: %d forward mappings, %d reverse mappings",
+			snapshotFileCount, reverseFileCount))
+	}
+
+	// Check for FileID mismatches
+	mismatches := 0
+	for fileID, path := range snapshot.reverseFileMap {
+		if mappedFileID, exists := snapshot.fileMap[path]; !exists || mappedFileID != fileID {
+			mismatches++
+		}
+	}
+	if mismatches > 0 {
+		errors = append(errors, fmt.Sprintf("found %d FileID mapping inconsistencies", mismatches))
+	}
+	metrics["fileid_mismatches"] = mismatches
+
+	return errors, warnings
+}
+
+// validateIndexConsistency checks trigram and symbol index consistency
+func (mi *MasterIndex) validateIndexConsistency(metrics map[string]interface{}) []string {
+	var warnings []string
+
+	totalFiles, _ := metrics["total_files"].(int64)
+
+	// Check trigram index
 	if mi.trigramIndex != nil {
 		trigramFiles := mi.trigramIndex.FileCount()
 		metrics["trigram_files"] = trigramFiles
@@ -2449,6 +2508,7 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 		metrics["trigram_files"] = 0
 	}
 
+	// Check symbol index
 	if mi.symbolIndex != nil {
 		symbolCount := mi.symbolIndex.DefinitionCount()
 		metrics["symbol_definitions"] = symbolCount
@@ -2460,7 +2520,14 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 		metrics["symbol_definitions"] = 0
 	}
 
-	// Check memory usage and pressure (safe estimation that handles nil components)
+	return warnings
+}
+
+// checkMemoryPressure analyzes memory usage and returns errors/warnings
+func (mi *MasterIndex) checkMemoryPressure(metrics map[string]interface{}) ([]string, []string) {
+	var errors, warnings []string
+
+	// Check memory usage (safe estimation that handles nil components)
 	memoryUsage := mi.estimateMemoryUsageSafe()
 	metrics["estimated_memory_bytes"] = memoryUsage
 	metrics["estimated_memory_mb"] = memoryUsage / (1024 * 1024)
@@ -2490,24 +2557,25 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 		}
 	}
 
-	// Check for potential race conditions
-	if isIndexing == 1 && searchCount > 0 {
-		warnings = append(warnings, "search operations performed during indexing (potential race condition)")
-	}
+	return errors, warnings
+}
 
-	// Determine overall health status
+// determineHealthStatus returns health status based on errors and warnings
+func (mi *MasterIndex) determineHealthStatus(errors, warnings []string) string {
 	if len(errors) > 0 {
-		health["status"] = "unhealthy"
-	} else if len(warnings) > 0 {
-		health["status"] = "degraded"
+		return "unhealthy"
 	}
+	if len(warnings) > 0 {
+		return "degraded"
+	}
+	return "healthy"
+}
 
-	health["errors"] = errors
-	health["warnings"] = warnings
-	health["metrics"] = metrics
-
-	// Log health check results
+// logHealthCheckResults logs the health check results if not healthy
+func (mi *MasterIndex) logHealthCheckResults(health map[string]interface{}) {
 	if health["status"] != "healthy" {
+		errors := health["errors"].([]string)
+		warnings := health["warnings"].([]string)
 		debug.LogIndexing("Health check %s: %d errors, %d warnings\n",
 			health["status"], len(errors), len(warnings))
 		for _, err := range errors {
@@ -2517,8 +2585,6 @@ func (mi *MasterIndex) HealthCheck() map[string]interface{} {
 			debug.LogIndexing("  WARNING: %s\n", warn)
 		}
 	}
-
-	return health
 }
 
 // GetTotalFilesForTesting returns the atomic totalFiles counter for testing purposes
