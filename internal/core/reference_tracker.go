@@ -2,6 +2,7 @@ package core
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -533,14 +534,22 @@ func (rt *ReferenceTracker) ProcessAllReferences() {
 	}
 
 	// Update reference statistics for all symbols
-	// OPTIMIZED: Use GetIDs() to iterate over SymbolStore efficiently
-	for _, symbolID := range rt.symbols.GetIDs() {
-		rt.updateReferenceStatsForSymbol(symbolID)
-	}
+	// PARALLEL: Each symbol's stats can be computed independently since:
+	// - All shared maps (incomingRefs, outgoingRefs, references) are read-only during this phase
+	// - Each symbol update only modifies its own fields
+	rt.updateReferenceStatsParallel()
 
 	// Build heuristic interface implementations based on method matching
 	// This runs after all symbols and explicit references are processed
 	rt.buildHeuristicImplementations()
+}
+
+// heuristicMatch represents a type-interface match found during parallel processing
+type heuristicMatch struct {
+	typeName         string
+	ifaceName        string
+	ifaceSymbolID    types.SymbolID
+	locationSymbolID types.SymbolID
 }
 
 // buildHeuristicImplementations finds potential interface implementations by method matching
@@ -549,6 +558,8 @@ func (rt *ReferenceTracker) ProcessAllReferences() {
 //
 // This enables Go implicit interface satisfaction detection without full type analysis.
 // The heuristic approach has lower confidence than explicit evidence (assignment, return, cast).
+//
+// Uses parallel map-reduce: map phase finds matches, reduce phase creates refs.
 func (rt *ReferenceTracker) buildHeuristicImplementations() {
 	// Step 0: Pre-build index of interfaces with explicit implements refs (O(n) once vs O(n*m) if checked per pair)
 	// Map: interface name -> true if has explicit implements
@@ -608,46 +619,118 @@ func (rt *ReferenceTracker) buildHeuristicImplementations() {
 		}
 	}
 
-	// Step 4: Match types against interfaces
-	// For each interface, find types that have ALL required methods
+	// Step 4: Match types against interfaces (parallel map phase)
+	// Collect interface names for parallel processing
+	var interfaceNames []string
 	for ifaceName, requiredMethods := range interfaceMethods {
 		if len(requiredMethods) == 0 {
 			continue // Empty interface - skip
 		}
-
-		ifaceSymbolID, hasIfaceSymbol := interfaceSymbols[ifaceName]
-		if !hasIfaceSymbol {
+		if _, hasIfaceSymbol := interfaceSymbols[ifaceName]; !hasIfaceSymbol {
 			continue
 		}
-
-		// Skip this interface if it already has explicit implements refs
-		// (O(1) lookup vs O(n) scan per type-interface pair)
 		if explicitImplementsIndex[ifaceName] {
 			continue
 		}
+		interfaceNames = append(interfaceNames, ifaceName)
+	}
 
-		// Check each type
-		for typeName, methods := range typeMethods {
-			// Check if type has all interface methods
-			allMatch := true
-			for methodName := range requiredMethods {
-				if _, has := methods[methodName]; !has {
-					allMatch = false
-					break
+	// For small workloads, sequential is faster
+	if len(interfaceNames) < 10 || len(typeMethods) < 50 {
+		for _, ifaceName := range interfaceNames {
+			rt.matchInterfaceToTypes(ifaceName, interfaceMethods[ifaceName], interfaceSymbols[ifaceName], typeMethods)
+		}
+		return
+	}
+
+	// Parallel map phase: each worker processes a subset of interfaces
+	numWorkers := runtime.NumCPU()
+	batchSize := (len(interfaceNames) + numWorkers - 1) / numWorkers
+
+	// Channel to collect matches from workers
+	matchChan := make(chan []heuristicMatch, numWorkers)
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		start := i * batchSize
+		end := start + batchSize
+		if end > len(interfaceNames) {
+			end = len(interfaceNames)
+		}
+		if start >= end {
+			break
+		}
+
+		wg.Add(1)
+		go func(batch []string) {
+			defer wg.Done()
+			var matches []heuristicMatch
+
+			for _, ifaceName := range batch {
+				requiredMethods := interfaceMethods[ifaceName]
+				ifaceSymbolID := interfaceSymbols[ifaceName]
+
+				// Check each type
+				for typeName, methods := range typeMethods {
+					allMatch := true
+					for methodName := range requiredMethods {
+						if _, has := methods[methodName]; !has {
+							allMatch = false
+							break
+						}
+					}
+
+					if allMatch {
+						var locationSymbolID types.SymbolID
+						for _, methodID := range methods {
+							locationSymbolID = methodID
+							break
+						}
+						matches = append(matches, heuristicMatch{
+							typeName:         typeName,
+							ifaceName:        ifaceName,
+							ifaceSymbolID:    ifaceSymbolID,
+							locationSymbolID: locationSymbolID,
+						})
+					}
 				}
 			}
+			matchChan <- matches
+		}(interfaceNames[start:end])
+	}
 
-			if allMatch {
-				// Create heuristic implements reference
-				// Find a method symbol to use for location (use first method)
-				var locationSymbolID types.SymbolID
-				for _, methodID := range methods {
-					locationSymbolID = methodID
-					break
-				}
+	// Close channel when all workers done
+	go func() {
+		wg.Wait()
+		close(matchChan)
+	}()
 
-				rt.createHeuristicImplementsRef(typeName, ifaceName, ifaceSymbolID, locationSymbolID)
+	// Reduce phase: create references from collected matches (sequential)
+	for matches := range matchChan {
+		for _, m := range matches {
+			rt.createHeuristicImplementsRef(m.typeName, m.ifaceName, m.ifaceSymbolID, m.locationSymbolID)
+		}
+	}
+}
+
+// matchInterfaceToTypes matches a single interface against all types (sequential path)
+func (rt *ReferenceTracker) matchInterfaceToTypes(ifaceName string, requiredMethods map[string]types.SymbolID, ifaceSymbolID types.SymbolID, typeMethods map[string]map[string]types.SymbolID) {
+	for typeName, methods := range typeMethods {
+		allMatch := true
+		for methodName := range requiredMethods {
+			if _, has := methods[methodName]; !has {
+				allMatch = false
+				break
 			}
+		}
+
+		if allMatch {
+			var locationSymbolID types.SymbolID
+			for _, methodID := range methods {
+				locationSymbolID = methodID
+				break
+			}
+			rt.createHeuristicImplementsRef(typeName, ifaceName, ifaceSymbolID, locationSymbolID)
 		}
 	}
 }
@@ -975,6 +1058,48 @@ func (rt *ReferenceTracker) resolveReferenceTarget(ref types.Reference, fileSymb
 	// Cache the result (even if 0 to avoid repeated lookups)
 	rt.referenceCache[cacheKey] = resolvedID
 	return resolvedID
+}
+
+// updateReferenceStatsParallel processes all symbols' reference stats in parallel
+// Safe because: all shared maps are read-only, each symbol updates only its own fields
+func (rt *ReferenceTracker) updateReferenceStatsParallel() {
+	symbolIDs := rt.symbols.GetIDs()
+	if len(symbolIDs) == 0 {
+		return
+	}
+
+	// For small workloads, sequential is faster (avoids goroutine overhead)
+	if len(symbolIDs) < 1000 {
+		for _, symbolID := range symbolIDs {
+			rt.updateReferenceStatsForSymbol(symbolID)
+		}
+		return
+	}
+
+	// Parallel processing for larger workloads
+	numWorkers := runtime.NumCPU()
+	batchSize := (len(symbolIDs) + numWorkers - 1) / numWorkers
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		start := i * batchSize
+		end := start + batchSize
+		if end > len(symbolIDs) {
+			end = len(symbolIDs)
+		}
+		if start >= end {
+			break
+		}
+
+		wg.Add(1)
+		go func(batch []types.SymbolID) {
+			defer wg.Done()
+			for _, symbolID := range batch {
+				rt.updateReferenceStatsForSymbol(symbolID)
+			}
+		}(symbolIDs[start:end])
+	}
+	wg.Wait()
 }
 
 // updateReferenceStatsForSymbol calculates reference statistics for a single symbol
