@@ -68,28 +68,9 @@ func (mi *MasterIndex) SearchWithOptions(pattern string, options types.SearchOpt
 		return []searchtypes.Result{}, errors.New("memory pressure detected - indexing temporarily suspended")
 	}
 
-	// Validate inputs
-	if pattern == "" {
-		err := errors.New("search pattern cannot be empty")
-		debug.LogIndexing("ERROR: %v\n", err)
+	// Validate inputs and options
+	if err := mi.validateSearchInput(pattern, &options); err != nil {
 		return nil, err
-	}
-
-	if len(pattern) > 1000 {
-		err := fmt.Errorf("search pattern too long: %d characters (max 1000)", len(pattern))
-		debug.LogIndexing("ERROR: %v\n", err)
-		return nil, err
-	}
-
-	// Validate search options
-	if options.MaxResults < 0 {
-		err := fmt.Errorf("max results cannot be negative: %d", options.MaxResults)
-		debug.LogIndexing("ERROR: %v\n", err)
-		return nil, err
-	}
-
-	if options.MaxResults == 0 {
-		options.MaxResults = 100 // Default limit
 	}
 
 	// Check index state, filtering out deleted files
@@ -101,86 +82,20 @@ func (mi *MasterIndex) SearchWithOptions(pattern string, options types.SearchOpt
 	}
 
 	// Validate core components
-	if mi.trigramIndex == nil {
-		err := errors.New("trigram index not initialized")
-		debug.LogIndexing("ERROR: %v\n", err)
-		return nil, err
-	}
-
-	if mi.symbolLocationIndex == nil {
-		debug.LogIndexing("Warning: symbol location index not initialized - function context extraction may fail\n")
-	}
-
-	if mi.refTracker == nil {
-		err := errors.New("reference tracker not initialized")
-		debug.LogIndexing("ERROR: %v\n", err)
+	if err := mi.validateSearchComponents(); err != nil {
 		return nil, err
 	}
 
 	debug.LogIndexing("Search: pattern='%s' (%d candidates, max_results=%d)\n",
 		pattern, len(allFiles), options.MaxResults)
 
+	// Parse query syntax and filter candidates
+	contentPattern, candidates := mi.parseQuerySyntax(pattern, allFiles)
+
 	// Use injected search engine with semantic scoring, or create default engine
 	engine := mi.searchEngine
 	if engine == nil {
 		engine = search.NewEngine(mi)
-	}
-
-	// Parse combined query syntax like "path:*.go foo" or "dir:internal token"
-	candidates := allFiles
-	contentPattern := pattern
-	if strings.Contains(pattern, "path:") || strings.Contains(pattern, "dir:") || strings.Contains(pattern, "ext:") {
-		fields := strings.Fields(pattern)
-		var dirs, exts []string
-		var glob string
-		var contentParts []string
-		for _, f := range fields {
-			if strings.HasPrefix(f, "path:") {
-				glob = strings.TrimPrefix(f, "path:")
-			} else if strings.HasPrefix(f, "dir:") {
-				dirs = append(dirs, strings.TrimPrefix(f, "dir:"))
-			} else if strings.HasPrefix(f, "ext:") {
-				e := strings.TrimPrefix(f, "ext:")
-				if !strings.HasPrefix(e, ".") {
-					e = "." + e
-				}
-				exts = append(exts, e)
-			} else {
-				contentParts = append(contentParts, f)
-			}
-		}
-		if len(contentParts) > 0 {
-			contentPattern = strings.Join(contentParts, " ")
-		}
-		// Build path search options
-		fsOpts := types.FileSearchOptions{MaxResults: 50000}
-		if glob != "" {
-			fsOpts.Pattern = glob
-			fsOpts.Type = "glob"
-		}
-		if len(dirs) > 0 {
-			fsOpts.Directories = dirs
-		}
-		if len(exts) > 0 {
-			fsOpts.Extensions = exts
-		}
-		if fsOpts.Pattern != "" || len(fsOpts.Directories) > 0 || len(fsOpts.Extensions) > 0 {
-			results, err := mi.fileSearchEngine.SearchFiles(fsOpts)
-			if err == nil && len(results) > 0 {
-				candSet := make(map[types.FileID]struct{}, len(results))
-				for _, r := range results {
-					candSet[r.FileID] = struct{}{}
-				}
-				// Intersect with allFiles
-				var filtered []types.FileID
-				for _, id := range allFiles {
-					if _, ok := candSet[id]; ok {
-						filtered = append(filtered, id)
-					}
-				}
-				candidates = filtered
-			}
-		}
 	}
 
 	// Delegate to search engine
@@ -190,6 +105,140 @@ func (mi *MasterIndex) SearchWithOptions(pattern string, options types.SearchOpt
 	atomic.AddInt64(&mi.searchCount, 1)
 
 	return results, nil
+}
+
+// validateSearchInput validates search pattern and options
+func (mi *MasterIndex) validateSearchInput(pattern string, options *types.SearchOptions) error {
+	if pattern == "" {
+		err := errors.New("search pattern cannot be empty")
+		debug.LogIndexing("ERROR: %v\n", err)
+		return err
+	}
+
+	if len(pattern) > 1000 {
+		err := fmt.Errorf("search pattern too long: %d characters (max 1000)", len(pattern))
+		debug.LogIndexing("ERROR: %v\n", err)
+		return err
+	}
+
+	if options.MaxResults < 0 {
+		err := fmt.Errorf("max results cannot be negative: %d", options.MaxResults)
+		debug.LogIndexing("ERROR: %v\n", err)
+		return err
+	}
+
+	if options.MaxResults == 0 {
+		options.MaxResults = 100 // Default limit
+	}
+
+	return nil
+}
+
+// validateSearchComponents checks that required index components are initialized
+func (mi *MasterIndex) validateSearchComponents() error {
+	if mi.trigramIndex == nil {
+		err := errors.New("trigram index not initialized")
+		debug.LogIndexing("ERROR: %v\n", err)
+		return err
+	}
+
+	if mi.symbolLocationIndex == nil {
+		debug.LogIndexing("Warning: symbol location index not initialized - function context extraction may fail\n")
+	}
+
+	if mi.refTracker == nil {
+		err := errors.New("reference tracker not initialized")
+		debug.LogIndexing("ERROR: %v\n", err)
+		return err
+	}
+
+	return nil
+}
+
+// parseQuerySyntax parses combined query syntax (path:, dir:, ext:) and returns content pattern and filtered candidates
+func (mi *MasterIndex) parseQuerySyntax(pattern string, allFiles []types.FileID) (string, []types.FileID) {
+	contentPattern := pattern
+	candidates := allFiles
+
+	// Check if pattern contains special syntax
+	if !strings.Contains(pattern, "path:") && !strings.Contains(pattern, "dir:") && !strings.Contains(pattern, "ext:") {
+		return contentPattern, candidates
+	}
+
+	// Parse fields
+	fields := strings.Fields(pattern)
+	var dirs, exts []string
+	var glob string
+	var contentParts []string
+
+	for _, f := range fields {
+		if strings.HasPrefix(f, "path:") {
+			glob = strings.TrimPrefix(f, "path:")
+		} else if strings.HasPrefix(f, "dir:") {
+			dirs = append(dirs, strings.TrimPrefix(f, "dir:"))
+		} else if strings.HasPrefix(f, "ext:") {
+			e := strings.TrimPrefix(f, "ext:")
+			if !strings.HasPrefix(e, ".") {
+				e = "." + e
+			}
+			exts = append(exts, e)
+		} else {
+			contentParts = append(contentParts, f)
+		}
+	}
+
+	if len(contentParts) > 0 {
+		contentPattern = strings.Join(contentParts, " ")
+	}
+
+	// Build file search options and filter candidates
+	fsOpts := mi.buildFileSearchOptions(glob, dirs, exts)
+	if fsOpts.Pattern != "" || len(fsOpts.Directories) > 0 || len(fsOpts.Extensions) > 0 {
+		candidates = mi.filterCandidatesByFileSearch(fsOpts, allFiles)
+	}
+
+	return contentPattern, candidates
+}
+
+// buildFileSearchOptions creates FileSearchOptions from parsed query fields
+func (mi *MasterIndex) buildFileSearchOptions(glob string, dirs, exts []string) types.FileSearchOptions {
+	fsOpts := types.FileSearchOptions{MaxResults: 50000}
+
+	if glob != "" {
+		fsOpts.Pattern = glob
+		fsOpts.Type = "glob"
+	}
+	if len(dirs) > 0 {
+		fsOpts.Directories = dirs
+	}
+	if len(exts) > 0 {
+		fsOpts.Extensions = exts
+	}
+
+	return fsOpts
+}
+
+// filterCandidatesByFileSearch filters file candidates using file search options
+func (mi *MasterIndex) filterCandidatesByFileSearch(fsOpts types.FileSearchOptions, allFiles []types.FileID) []types.FileID {
+	results, err := mi.fileSearchEngine.SearchFiles(fsOpts)
+	if err != nil || len(results) == 0 {
+		return allFiles
+	}
+
+	candSet := make(map[types.FileID]struct{}, len(results))
+	for _, r := range results {
+		candSet[r.FileID] = struct{}{}
+	}
+
+	// Intersect with allFiles
+	var filtered []types.FileID
+	for _, id := range allFiles {
+		if _, ok := candSet[id]; ok {
+			filtered = append(filtered, id)
+		}
+	}
+
+	return filtered
 }
 
 // SearchDetailedWithOptions performs a detailed search with the given options

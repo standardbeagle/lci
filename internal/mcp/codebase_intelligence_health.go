@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/standardbeagle/lci/internal/searchtypes"
@@ -28,6 +29,86 @@ func (s *Server) isInsightExcludedFile(path string) bool {
 			if matched {
 				return true
 			}
+		}
+	}
+
+	return false
+}
+
+// isTestHelperFunction returns true if the symbol name matches test helper patterns.
+// This filters out test setup, mock, fake, and helper functions from code insight reports.
+func isTestHelperFunction(symbolName string) bool {
+	if symbolName == "" {
+		return false
+	}
+
+	// Test helper function name prefixes (case-insensitive check via lowercase comparison)
+	lowerName := strings.ToLower(symbolName)
+	helperPrefixes := []string{
+		"setup", "teardown", "helper", "mock", "fake", "stub",
+		"create", "build", "new", "make", // Common test factory prefixes
+	}
+
+	// Check for helper prefixes followed by test-related words
+	for _, prefix := range helperPrefixes {
+		if strings.HasPrefix(lowerName, prefix) {
+			// "setup" and "teardown" are always test helpers
+			if prefix == "setup" || prefix == "teardown" {
+				return true
+			}
+			// "helper", "mock", "fake", "stub" are always test helpers
+			if prefix == "helper" || prefix == "mock" || prefix == "fake" || prefix == "stub" {
+				return true
+			}
+			// Factory prefixes need "test" or "mock" somewhere in name
+			if strings.Contains(lowerName, "test") || strings.Contains(lowerName, "mock") ||
+				strings.Contains(lowerName, "fake") || strings.Contains(lowerName, "fixture") {
+				return true
+			}
+		}
+	}
+
+	// Check for test helper suffixes
+	helperSuffixes := []string{
+		"helper", "helpers", "fixture", "fixtures", "mock", "mocks",
+		"fake", "fakes", "stub", "stubs", "factory",
+	}
+	for _, suffix := range helperSuffixes {
+		if strings.HasSuffix(lowerName, suffix) {
+			return true
+		}
+	}
+
+	// Check for "ForTest" or "ForTests" pattern (common in Go)
+	if strings.Contains(lowerName, "fortest") {
+		return true
+	}
+
+	return false
+}
+
+// isTestHelperPath returns true if the file path indicates a test helper location
+func isTestHelperPath(path string) bool {
+	lowerPath := strings.ToLower(path)
+	testHelperDirs := []string{
+		"testhelpers/", "testhelper/", "testing/", "testutil/", "testutils/",
+		"mocks/", "fakes/", "stubs/", "fixtures/", "testdata/",
+	}
+	for _, dir := range testHelperDirs {
+		if strings.Contains(lowerPath, dir) {
+			return true
+		}
+	}
+
+	// Check for test helper file patterns
+	testHelperPatterns := []string{
+		"_test_helper", "test_helper", "_testutil", "testutil_",
+		"_mock", "mock_", "_fake", "fake_", "_stub", "stub_",
+	}
+	baseName := strings.ToLower(filepath.Base(path))
+	for _, pattern := range testHelperPatterns {
+		if strings.Contains(baseName, pattern) {
+			return true
 		}
 	}
 
@@ -85,8 +166,11 @@ func (s *Server) calculateComplexityMetricsFromFiles(allFiles []*types.FileInfo)
 					distribution["medium"]++
 				} else {
 					distribution["high"]++
-					// Track high complexity functions for reporting (exclude test files)
-					if len(highComplexityFuncs) < 10 && !s.isInsightExcludedFile(file.Path) {
+					// Track high complexity functions for reporting (exclude test files and test helpers)
+					if len(highComplexityFuncs) < 10 &&
+						!s.isInsightExcludedFile(file.Path) &&
+						!isTestHelperPath(file.Path) &&
+						!isTestHelperFunction(sym.Name) {
 						objectID := searchtypes.EncodeSymbolID(sym.ID)
 						highComplexityFuncs = append(highComplexityFuncs, FunctionInfo{
 							ObjectID:   objectID,
@@ -142,7 +226,17 @@ func (s *Server) identifyHotspotsFromFiles(allFiles []*types.FileInfo) []Hotspot
 	hotspots := make([]Hotspot, 0)
 
 	for _, file := range allFiles {
+		// Skip test helper paths
+		if isTestHelperPath(file.Path) {
+			continue
+		}
+
 		for _, sym := range file.EnhancedSymbols {
+			// Skip test helper functions
+			if isTestHelperFunction(sym.Name) {
+				continue
+			}
+
 			if sym.Type == types.SymbolTypeFunction || sym.Type == types.SymbolTypeMethod {
 				cc := sym.Complexity
 				if cc <= 0 {
@@ -429,7 +523,17 @@ func (s *Server) calculateDetailedCodeSmells(allFiles []*types.FileInfo) []CodeS
 	var smells []CodeSmellEntry
 
 	for _, file := range allFiles {
+		// Skip test helper paths
+		if isTestHelperPath(file.Path) {
+			continue
+		}
+
 		for _, sym := range file.EnhancedSymbols {
+			// Skip test helper functions
+			if isTestHelperFunction(sym.Name) {
+				continue
+			}
+
 			basePath := filepath.Base(file.Path)
 
 			// 1. Long function (>50 lines)
@@ -548,7 +652,17 @@ func (s *Server) identifyProblematicSymbols(allFiles []*types.FileInfo) []Proble
 	var problematic []ProblematicSymbol
 
 	for _, file := range allFiles {
+		// Skip test helper paths
+		if isTestHelperPath(file.Path) {
+			continue
+		}
+
 		for _, sym := range file.EnhancedSymbols {
+			// Skip test helper functions
+			if isTestHelperFunction(sym.Name) {
+				continue
+			}
+
 			tags, riskScore := s.calculateSymbolRiskAndTags(sym)
 
 			if riskScore >= riskScoreCutoff {
