@@ -251,6 +251,19 @@ func (fp *FileProcessor) processFile(ctx context.Context, workerID int, task Fil
 		}
 	}
 
+	// PRE-COMPUTE LINE-TO-SYMBOL INDEX: Build in map phase to eliminate 1.1GB allocation in search
+	// This replaces the per-file map creation in applySemanticFiltering with a single map phase computation
+	// Reduces search-time allocations from O(files * symbols) to O(1) per file lookup
+	// IMPORTANT: Must use enhancedSymbols since search engine accesses FileInfo.EnhancedSymbols
+	var lineToSymbols map[int][]int
+	if len(enhancedSymbols) > 0 {
+		// Estimate unique lines (most files have ~1 symbol per 5-10 lines)
+		lineToSymbols = make(map[int][]int, len(enhancedSymbols)/3+1)
+		for i, symbol := range enhancedSymbols {
+			lineToSymbols[symbol.Line] = append(lineToSymbols[symbol.Line], i)
+		}
+	}
+
 	// Pre-compute trigrams in parallel processors using bucketed format only
 	// OPTIMIZATION: Bucketed format enables lock-free merging and eliminates duplicate generation
 	var bucketedTrigrams *core.BucketedTrigramResult
@@ -303,7 +316,8 @@ func (fp *FileProcessor) processFile(ctx context.Context, workerID int, task Fil
 	result.EnhancedSymbols = enhancedSymbols // Includes complexity data from parser
 	result.References = references
 	result.Scopes = scopes
-	result.ScopeChains = scopeChains // Pre-built in map phase for lock-free reduce
+	result.ScopeChains = scopeChains     // Pre-built in map phase for lock-free reduce
+	result.LineToSymbols = lineToSymbols // Pre-built line->symbol index for O(1) semantic filtering
 	result.Content = content                               // Keep content for integrator compatibility
 	result.LineOffsets = types.ComputeLineOffsets(content) // Precompute for O(1) line access
 	result.AST = ast

@@ -71,6 +71,7 @@ type ProcessedFile struct {
 	References       []types.Reference           // extracted references
 	Scopes           []types.ScopeInfo           // scope information
 	ScopeChains      [][]types.ScopeInfo         // Pre-computed scope chains per symbol (indexed same as Symbols)
+	LineToSymbols    map[int][]int               // Pre-computed line->symbol indices for O(1) semantic filtering
 	BucketedTrigrams *core.BucketedTrigramResult // Pre-sharded trigrams for lock-free merging
 	Content          []byte                      // file content for metrics calculation
 	LineOffsets      []int                       // precomputed line boundaries for O(1) line access

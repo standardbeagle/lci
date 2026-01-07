@@ -25,6 +25,7 @@ type Indexer interface {
 	GetEnhancedSymbolAtLine(fileID types.FileID, line int) *types.EnhancedSymbol
 	FindSymbolsByName(name string) []*types.EnhancedSymbol
 	GetEnhancedSymbol(symbolID types.SymbolID) *types.EnhancedSymbol
+	GetFileLineToSymbols(fileID types.FileID) map[int][]int // Pre-computed line->symbol indices for O(1) semantic filtering
 
 	// Reference operations
 	GetFileReferences(fileID types.FileID) []types.Reference

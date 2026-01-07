@@ -56,6 +56,14 @@ type ReferenceTracker struct {
 	// Performance analysis data by file for code_insight anti-pattern detection
 	perfDataByFile map[types.FileID][]types.FunctionPerfData
 
+	// Pre-computed line->symbol indices for O(1) semantic filtering during search
+	// Eliminates 1.1GB allocation in applySemanticFiltering by moving computation to indexing
+	lineToSymbolsByFile map[types.FileID]map[int][]int
+
+	// Cached enhanced symbol slices to avoid 427MB allocation from repeated GetFileEnhancedSymbols calls
+	// Built once per file during indexing, returned directly without copying
+	enhancedSymbolsByFile map[types.FileID][]*types.EnhancedSymbol
+
 	// Pool for symbol slices used during reference resolution (542MB → ~50MB savings)
 	symbolSlicePool sync.Pool
 
@@ -100,11 +108,13 @@ func NewReferenceTracker(symbolLocationIndex *SymbolLocationIndex) *ReferenceTra
 		importResolver:      NewImportResolver(),
 		symbolLocationIndex: symbolLocationIndex,
 		// Start with modest cache size - will grow if needed
-		referenceCache:  make(map[uint64]types.SymbolID, expectedSymbols*2),
-		scopeChainCache: make(map[uint64]*scopeChainCacheEntry, 64),
-		perfDataByFile:  make(map[types.FileID][]types.FunctionPerfData, 32),
-		nextSymbolID:    1,
-		nextRefID:       1,
+		referenceCache:        make(map[uint64]types.SymbolID, expectedSymbols*2),
+		scopeChainCache:       make(map[uint64]*scopeChainCacheEntry, 64),
+		perfDataByFile:        make(map[types.FileID][]types.FunctionPerfData, 32),
+		lineToSymbolsByFile:   make(map[types.FileID]map[int][]int, 32),
+		enhancedSymbolsByFile: make(map[types.FileID][]*types.EnhancedSymbol, 32),
+		nextSymbolID:          1,
+		nextRefID:             1,
 	}
 
 	// Initialize symbol slice pool for reference resolution
@@ -144,6 +154,8 @@ func (rt *ReferenceTracker) Clear() {
 	rt.referenceCache = make(map[uint64]types.SymbolID)
 	rt.scopeChainCache = make(map[uint64]*scopeChainCacheEntry)
 	rt.perfDataByFile = make(map[types.FileID][]types.FunctionPerfData)
+	rt.lineToSymbolsByFile = make(map[types.FileID]map[int][]int)
+	rt.enhancedSymbolsByFile = make(map[types.FileID][]*types.EnhancedSymbol)
 	rt.nextSymbolID = 1
 	rt.nextRefID = 1
 
@@ -1307,28 +1319,43 @@ func (rt *ReferenceTracker) GetEnhancedSymbol(symbolID types.SymbolID) *types.En
 }
 
 // GetFileEnhancedSymbols returns all enhanced symbols for a file
+// Returns cached slice if available (zero-copy), otherwise builds and caches
 // Returns nil if the file has been deleted
 func (rt *ReferenceTracker) GetFileEnhancedSymbols(fileID types.FileID) []*types.EnhancedSymbol {
 	rt.mu.RLock()
-	defer rt.mu.RUnlock()
 
 	// Check if file is deleted first (early return optimization)
 	if rt.deletedFileTracker != nil && rt.deletedFileTracker.IsDeleted(fileID) {
+		rt.mu.RUnlock()
 		return nil
+	}
+
+	// Return cached slice if available (zero-copy)
+	if cached, ok := rt.enhancedSymbolsByFile[fileID]; ok {
+		rt.mu.RUnlock()
+		return cached
 	}
 
 	symbolIDs, exists := rt.symbolsByFile[fileID]
 	if !exists {
+		rt.mu.RUnlock()
 		return nil
 	}
 
-	var enhanced []*types.EnhancedSymbol
+	// Build slice with pre-allocated capacity
+	enhanced := make([]*types.EnhancedSymbol, 0, len(symbolIDs))
 	for _, id := range symbolIDs {
-		// Use SymbolStore.Get for fast O(1) access
 		if symbol := rt.symbols.Get(id); symbol != nil {
 			enhanced = append(enhanced, symbol)
 		}
 	}
+	rt.mu.RUnlock()
+
+	// Cache for future calls (upgrade to write lock)
+	rt.mu.Lock()
+	rt.enhancedSymbolsByFile[fileID] = enhanced
+	rt.mu.Unlock()
+
 	return enhanced
 }
 
@@ -1805,4 +1832,26 @@ func (rt *ReferenceTracker) GetFilePerfData(fileID types.FileID) []types.Functio
 	defer rt.mu.RUnlock()
 
 	return rt.perfDataByFile[fileID]
+}
+
+// StoreLineToSymbols stores pre-computed line->symbol indices for a file
+// This eliminates 1.1GB allocation in search by moving computation to indexing
+func (rt *ReferenceTracker) StoreLineToSymbols(fileID types.FileID, lineToSymbols map[int][]int) {
+	if len(lineToSymbols) == 0 {
+		return
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	rt.lineToSymbolsByFile[fileID] = lineToSymbols
+}
+
+// GetFileLineToSymbols returns pre-computed line->symbol indices for semantic filtering
+// Returns nil if not available (caller should build on-demand as fallback)
+func (rt *ReferenceTracker) GetFileLineToSymbols(fileID types.FileID) map[int][]int {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
+	return rt.lineToSymbolsByFile[fileID]
 }

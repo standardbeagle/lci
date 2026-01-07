@@ -419,6 +419,11 @@ func (fi *FileIntegrator) IntegrateFiles(ctx context.Context, resultChan <-chan 
 					if len(result.PerfData) > 0 {
 						fi.refTracker.StorePerfData(fileID, result.PerfData)
 					}
+					// Store pre-computed line->symbol index for O(1) semantic filtering
+					// Eliminates 1.1GB allocation in search by moving computation to indexing
+					if len(result.LineToSymbols) > 0 {
+						fi.refTracker.StoreLineToSymbols(fileID, result.LineToSymbols)
+					}
 					// Feed side effect results to propagator for function purity analysis
 					// This must happen after symbol processing so refTracker can resolve symbol IDs
 					if fi.sideEffectPropagator != nil && len(result.SideEffectResults) > 0 {

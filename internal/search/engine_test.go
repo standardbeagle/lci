@@ -169,6 +169,10 @@ func (m *MockIndexer) GetFileEnhancedSymbols(fileID types.FileID) []*types.Enhan
 	return m.symbols[fileID]
 }
 
+func (m *MockIndexer) GetFileLineToSymbols(fileID types.FileID) map[int][]int {
+	return nil // Tests don't use pre-computed index - rely on fallback
+}
+
 func (m *MockIndexer) GetSymbolAtLine(fileID types.FileID, line int) *types.Symbol {
 	symbols, exists := m.symbols[fileID]
 	if !exists {

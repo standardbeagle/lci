@@ -337,6 +337,11 @@ type FileInfo struct {
 	// Example: LineOffsets = [0, 10, 25] means line 1 starts at 0, line 2 at 10, line 3 at 25
 	LineOffsets []int `json:"-"` // Computed during indexing
 
+	// Performance optimization: Pre-computed line->symbol index for O(1) semantic filtering
+	// LineToSymbols[line] contains indices into EnhancedSymbols for symbols on that line
+	// Avoids O(symbols) scan per search match by moving to O(1) lookup
+	LineToSymbols map[int][]int `json:"-"` // Computed during indexing
+
 	// Performance analysis data collected during AST parsing
 	// Used for detecting performance anti-patterns (sequential awaits, expensive calls in loops, etc.)
 	PerfData []FunctionPerfData `json:"perf_data,omitempty"`

@@ -847,6 +847,7 @@ func (e *Engine) prepareFileInfo(fileID types.FileID, path string, content []byt
 			Path:            path,
 			Content:         content,
 			EnhancedSymbols: e.indexer.GetFileEnhancedSymbols(fileID),
+			LineToSymbols:   e.indexer.GetFileLineToSymbols(fileID), // Pre-computed for O(1) semantic filtering
 		}
 	}
 
@@ -1473,7 +1474,8 @@ func (e *Engine) scoreMatch(file *types.FileInfo, match Match, pattern string, l
 }
 
 // applySemanticFiltering filters matches based on semantic criteria
-// OPTIMIZED: Pre-builds line-to-symbols index to avoid O(matches*symbols) complexity
+// OPTIMIZED: Uses pre-computed LineToSymbols from indexing to avoid O(matches*symbols) complexity
+// Eliminates 1.1GB allocation by reusing index computed during map phase
 func (e *Engine) applySemanticFiltering(fileInfo *types.FileInfo, matches []Match, pattern string, options types.SearchOptions) []Match {
 	if len(options.SymbolTypes) == 0 && !options.DeclarationOnly && !options.UsageOnly &&
 		!options.ExportedOnly && !options.ExcludeTests && !options.ExcludeComments &&
@@ -1481,11 +1483,14 @@ func (e *Engine) applySemanticFiltering(fileInfo *types.FileInfo, matches []Matc
 		return matches // No semantic filtering requested
 	}
 
-	// OPTIMIZATION: Build line-to-symbols index once instead of scanning for every match
-	// This reduces complexity from O(matches * symbols) to O(matches + symbols)
-	lineToSymbols := make(map[int][]int, len(fileInfo.EnhancedSymbols)) // line -> indices into fileInfo.EnhancedSymbols
-	for i, symbol := range fileInfo.EnhancedSymbols {
-		lineToSymbols[symbol.Line] = append(lineToSymbols[symbol.Line], i)
+	// Use pre-computed index if available (from map phase), otherwise build on-demand as fallback
+	lineToSymbols := fileInfo.LineToSymbols
+	if lineToSymbols == nil && len(fileInfo.EnhancedSymbols) > 0 {
+		// Fallback: build index on-demand (for files indexed before this optimization)
+		lineToSymbols = make(map[int][]int, len(fileInfo.EnhancedSymbols))
+		for i, symbol := range fileInfo.EnhancedSymbols {
+			lineToSymbols[symbol.Line] = append(lineToSymbols[symbol.Line], i)
+		}
 	}
 
 	// Pre-allocate result slice with reasonable capacity

@@ -1922,6 +1922,12 @@ func (mi *MasterIndex) getFileInternal(fileID types.FileID, readOnly bool) *type
 		perfData = mi.refTracker.GetFilePerfData(fileID)
 	}
 
+	// Get pre-computed line->symbol index for O(1) semantic filtering
+	var lineToSymbols map[int][]int
+	if mi.refTracker != nil {
+		lineToSymbols = mi.refTracker.GetFileLineToSymbols(fileID)
+	}
+
 	// NOTE: EnhancedSymbols is now []*EnhancedSymbol - direct assignment, no copying
 	fileInfo := &types.FileInfo{
 		ID:              fileID,
@@ -1930,7 +1936,8 @@ func (mi *MasterIndex) getFileInternal(fileID types.FileID, readOnly bool) *type
 		Lines:           nil,             // DEPRECATED: Use GetFileLines() instead
 		EnhancedSymbols: enhancedSymbols, // Direct assignment - zero-copy from ReferenceTracker
 		Imports:         imports,
-		PerfData:        perfData, // Performance data for anti-pattern detection
+		PerfData:        perfData,        // Performance data for anti-pattern detection
+		LineToSymbols:   lineToSymbols,   // Pre-computed for O(1) semantic filtering
 	}
 
 	// EFFICIENT ADD: FileInfo caching removed to prevent memory leak
@@ -2025,6 +2032,12 @@ func (mi *MasterIndex) GetFileSymbols(fileID types.FileID) []types.Symbol {
 func (mi *MasterIndex) GetFileEnhancedSymbols(fileID types.FileID) []*types.EnhancedSymbol {
 	// Delegate to reference tracker which maintains the enhanced symbols
 	return mi.refTracker.GetFileEnhancedSymbols(fileID)
+}
+
+// GetFileLineToSymbols returns pre-computed line->symbol indices for O(1) semantic filtering
+// This data is computed during indexing to avoid 1.1GB allocation during search
+func (mi *MasterIndex) GetFileLineToSymbols(fileID types.FileID) map[int][]int {
+	return mi.refTracker.GetFileLineToSymbols(fileID)
 }
 
 // GetSymbolAtLine finds the symbol that contains the given line in a file
