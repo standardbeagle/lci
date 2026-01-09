@@ -91,6 +91,9 @@ lci = "lci:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["lci"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"lci/bin" = "lci/bin"
 ''')
 
     # Copy README
