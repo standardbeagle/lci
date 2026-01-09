@@ -111,12 +111,12 @@ packages = ["lci"]
         check=True,
     )
 
-    # Find the built wheel and rename with platform tag
-    wheels = list(dist_dir.glob("lightning_code_index-*.whl"))
-    if not wheels:
-        raise RuntimeError("No wheel built")
+    # Find the built wheel (specifically the generic 'any' wheel) and rename with platform tag
+    any_wheel = dist_dir / f"lightning_code_index-{version}-py3-none-any.whl"
+    if not any_wheel.exists():
+        raise RuntimeError(f"No wheel built: expected {any_wheel}")
 
-    wheel = wheels[-1]
+    wheel = any_wheel
     # Rename to platform-specific wheel
     parts = wheel.name.split("-")
     # lci-version-py3-none-any.whl -> lci-version-py3-none-platform.whl
