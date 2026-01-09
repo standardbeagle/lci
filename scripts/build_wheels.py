@@ -96,12 +96,13 @@ packages = ["lci"]
     # Copy README
     shutil.copy2("README.md", temp_dir / "README.md")
 
-    # Build wheel
+    # Build wheel using the build module
     subprocess.run(
         [
-            sys.executable, "-m", "pip", "wheel",
-            "--no-deps",
-            "--wheel-dir", str(dist_dir),
+            sys.executable, "-m", "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir", str(dist_dir),
             str(temp_dir),
         ],
         check=True,
