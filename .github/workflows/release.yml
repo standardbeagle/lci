@@ -17,22 +17,27 @@ jobs:
             goos: linux
             goarch: amd64
             artifact: lci_linux_amd64
+            binary: lci
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
             artifact: lci_linux_arm64
-          - os: macos-13
-            goos: darwin
-            goarch: amd64
-            artifact: lci_darwin_amd64
+            binary: lci
           - os: macos-latest
             goos: darwin
             goarch: arm64
             artifact: lci_darwin_arm64
+            binary: lci
+          - os: macos-13-large
+            goos: darwin
+            goarch: amd64
+            artifact: lci_darwin_amd64
+            binary: lci
           - os: windows-latest
             goos: windows
             goarch: amd64
             artifact: lci_windows_amd64
+            binary: lci.exe
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -40,22 +45,38 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
 
-      - name: Build with GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: build --clean --single-target
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      - name: Build binary
+        shell: bash
+        run: |
+          CGO_ENABLED=1 go build \
+            -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ${{ matrix.binary }} \
+            ./cmd/lci
+
+      - name: Create archive (Unix)
+        if: matrix.goos != 'windows'
+        run: |
+          mkdir -p dist
+          tar -czvf dist/${{ matrix.artifact }}_${{ steps.version.outputs.version }}.tar.gz \
+            ${{ matrix.binary }} LICENSE README.md
+
+      - name: Create archive (Windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Compress-Archive -Path ${{ matrix.binary }},LICENSE,README.md -DestinationPath dist/${{ matrix.artifact }}_${{ steps.version.outputs.version }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -162,29 +183,46 @@ jobs:
           name: binaries-windows
           path: artifacts/
 
-      - name: Extract binaries
+      - name: Extract and organize binaries
         run: |
           mkdir -p binaries
           cd artifacts
+
+          # Extract each archive and rename binary based on archive name
           for f in *.tar.gz; do
-            tar -xzf "$f" -C ../binaries
-          done
-          for f in *.zip; do
-            unzip -o "$f" -d ../binaries
-          done
-          cd ../binaries
-          # Flatten directory structure - move binaries to root
-          find . -name 'lci' -o -name 'lci.exe' | while read binary; do
-            dir=$(dirname "$binary")
-            base=$(basename "$dir")
-            if [ -f "$binary" ]; then
-              if [[ "$binary" == *".exe" ]]; then
-                mv "$binary" "lci_${base#lci_}.exe" 2>/dev/null || true
-              else
-                mv "$binary" "lci_${base#lci_}" 2>/dev/null || true
-              fi
+            # Get platform from filename (e.g., lci_linux_amd64_0.1.0.tar.gz -> linux_amd64)
+            base=$(basename "$f" .tar.gz)
+            platform=$(echo "$base" | sed 's/lci_\([^_]*_[^_]*\)_.*/\1/')
+
+            # Extract to temp dir
+            tmpdir=$(mktemp -d)
+            tar -xzf "$f" -C "$tmpdir"
+
+            # Move and rename binary
+            if [ -f "$tmpdir/lci" ]; then
+              mv "$tmpdir/lci" "../binaries/lci_${platform}"
             fi
+            rm -rf "$tmpdir"
           done
+
+          for f in *.zip; do
+            # Get platform from filename
+            base=$(basename "$f" .zip)
+            platform=$(echo "$base" | sed 's/lci_\([^_]*_[^_]*\)_.*/\1/')
+
+            # Extract to temp dir
+            tmpdir=$(mktemp -d)
+            unzip -o "$f" -d "$tmpdir"
+
+            # Move and rename binary
+            if [ -f "$tmpdir/lci.exe" ]; then
+              mv "$tmpdir/lci.exe" "../binaries/lci_${platform}.exe"
+            fi
+            rm -rf "$tmpdir"
+          done
+
+          cd ../binaries
+          chmod +x lci_* 2>/dev/null || true
           ls -la
 
       - name: Build wheels
@@ -225,28 +263,41 @@ jobs:
         run: |
           mkdir -p npm/binaries
           cd artifacts
+
+          # Extract each archive and rename binary based on archive name
           for f in *.tar.gz; do
-            tar -xzf "$f" -C ../npm/binaries
-          done
-          for f in *.zip; do
-            unzip -o "$f" -d ../npm/binaries
-          done
-          cd ../npm/binaries
-          # Flatten directory structure - move binaries to root with proper names
-          find . -mindepth 2 -name 'lci' -o -name 'lci.exe' | while read binary; do
-            dir=$(dirname "$binary")
-            base=$(basename "$dir")
-            if [ -f "$binary" ]; then
-              if [[ "$binary" == *".exe" ]]; then
-                mv "$binary" "lci_${base#lci_}.exe" 2>/dev/null || true
-              else
-                mv "$binary" "lci_${base#lci_}" 2>/dev/null || true
-              fi
+            # Get platform from filename (e.g., lci_linux_amd64_0.1.0.tar.gz -> linux_amd64)
+            base=$(basename "$f" .tar.gz)
+            platform=$(echo "$base" | sed 's/lci_\([^_]*_[^_]*\)_.*/\1/')
+
+            # Extract to temp dir
+            tmpdir=$(mktemp -d)
+            tar -xzf "$f" -C "$tmpdir"
+
+            # Move and rename binary
+            if [ -f "$tmpdir/lci" ]; then
+              mv "$tmpdir/lci" "../npm/binaries/lci_${platform}"
             fi
+            rm -rf "$tmpdir"
           done
-          # Remove empty directories
-          find . -type d -empty -delete 2>/dev/null || true
-          # Make binaries executable
+
+          for f in *.zip; do
+            # Get platform from filename
+            base=$(basename "$f" .zip)
+            platform=$(echo "$base" | sed 's/lci_\([^_]*_[^_]*\)_.*/\1/')
+
+            # Extract to temp dir
+            tmpdir=$(mktemp -d)
+            unzip -o "$f" -d "$tmpdir"
+
+            # Move and rename binary
+            if [ -f "$tmpdir/lci.exe" ]; then
+              mv "$tmpdir/lci.exe" "../npm/binaries/lci_${platform}.exe"
+            fi
+            rm -rf "$tmpdir"
+          done
+
+          cd ../npm/binaries
           chmod +x lci_* 2>/dev/null || true
           ls -la
 
