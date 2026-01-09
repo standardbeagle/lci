@@ -9,7 +9,63 @@ permissions:
   contents: write
 
 jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact: lci_linux_amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            artifact: lci_linux_arm64
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            artifact: lci_darwin_amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact: lci_darwin_arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact: lci_windows_amd64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build with GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: build --clean --single-target
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          retention-days: 1
+
   release:
+    needs: build
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -22,33 +78,55 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          go-version: '1.24'
-          cache: true
+          path: artifacts/
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+
+          # Process each artifact directory
+          for dir in artifacts/*/; do
+            artifact_name=$(basename "$dir")
+            echo "Processing $artifact_name"
+
+            # Find the archive file
+            if ls "$dir"*.tar.gz 1> /dev/null 2>&1; then
+              cp "$dir"*.tar.gz release/
+            fi
+            if ls "$dir"*.zip 1> /dev/null 2>&1; then
+              cp "$dir"*.zip release/
+            fi
+          done
+
+          # Generate checksums
+          cd release
+          sha256sum * > checksums.txt
+          cat checksums.txt
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+          files: release/*
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload binaries artifact
+      - name: Upload combined binaries artifact
         uses: actions/upload-artifact@v4
         with:
           name: binaries
-          path: dist/*.tar.gz
+          path: release/*.tar.gz
           retention-days: 1
 
       - name: Upload Windows binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: binaries-windows
-          path: dist/*.zip
+          path: release/*.zip
           retention-days: 1
 
   publish-pypi:
