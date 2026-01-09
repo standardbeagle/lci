@@ -11,10 +11,16 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -30,3 +36,155 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/*.tar.gz
+          retention-days: 1
+
+      - name: Upload Windows binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-windows
+          path: dist/*.zip
+          retention-days: 1
+
+  publish-pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/lightning-code-index/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build hatchling
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: artifacts/
+
+      - name: Download Windows binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-windows
+          path: artifacts/
+
+      - name: Extract binaries
+        run: |
+          mkdir -p binaries
+          cd artifacts
+          for f in *.tar.gz; do
+            tar -xzf "$f" -C ../binaries
+          done
+          for f in *.zip; do
+            unzip -o "$f" -d ../binaries
+          done
+          cd ../binaries
+          # Flatten directory structure - move binaries to root
+          find . -name 'lci' -o -name 'lci.exe' | while read binary; do
+            dir=$(dirname "$binary")
+            base=$(basename "$dir")
+            if [ -f "$binary" ]; then
+              if [[ "$binary" == *".exe" ]]; then
+                mv "$binary" "lci_${base#lci_}.exe" 2>/dev/null || true
+              else
+                mv "$binary" "lci_${base#lci_}" 2>/dev/null || true
+              fi
+            fi
+          done
+          ls -la
+
+      - name: Build wheels
+        run: |
+          python scripts/build_wheels.py \
+            --version "${{ needs.release.outputs.version }}" \
+            --binary-dir binaries \
+            --dist-dir dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: artifacts/
+
+      - name: Download Windows binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-windows
+          path: artifacts/
+
+      - name: Extract and prepare binaries
+        run: |
+          mkdir -p npm/binaries
+          cd artifacts
+          for f in *.tar.gz; do
+            tar -xzf "$f" -C ../npm/binaries
+          done
+          for f in *.zip; do
+            unzip -o "$f" -d ../npm/binaries
+          done
+          cd ../npm/binaries
+          # Flatten directory structure - move binaries to root with proper names
+          find . -mindepth 2 -name 'lci' -o -name 'lci.exe' | while read binary; do
+            dir=$(dirname "$binary")
+            base=$(basename "$dir")
+            if [ -f "$binary" ]; then
+              if [[ "$binary" == *".exe" ]]; then
+                mv "$binary" "lci_${base#lci_}.exe" 2>/dev/null || true
+              else
+                mv "$binary" "lci_${base#lci_}" 2>/dev/null || true
+              fi
+            fi
+          done
+          # Remove empty directories
+          find . -type d -empty -delete 2>/dev/null || true
+          # Make binaries executable
+          chmod +x lci_* 2>/dev/null || true
+          ls -la
+
+      - name: Update package version
+        run: |
+          cd npm
+          npm version "${{ needs.release.outputs.version }}" --no-git-tag-version
+
+      - name: Copy README and LICENSE
+        run: |
+          cp README.md npm/
+          cp LICENSE npm/
+
+      - name: Publish to npm
+        run: |
+          cd npm
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

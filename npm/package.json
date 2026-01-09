@@ -1,0 +1,44 @@
+{
+  "name": "@standardbeagle/lci",
+  "version": "0.0.0",
+  "description": "Lightning Code Index - Sub-millisecond semantic code search and analysis",
+  "keywords": [
+    "code-search",
+    "semantic-search",
+    "code-analysis",
+    "mcp",
+    "indexing",
+    "cli"
+  ],
+  "homepage": "https://github.com/standardbeagle/lci",
+  "bugs": {
+    "url": "https://github.com/standardbeagle/lci/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/standardbeagle/lci.git"
+  },
+  "license": "MIT",
+  "author": "Standard Beagle",
+  "bin": {
+    "lci": "bin/lci.js"
+  },
+  "files": [
+    "bin/",
+    "binaries/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

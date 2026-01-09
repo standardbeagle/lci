@@ -17,6 +17,24 @@ Lightning-fast code indexing and search for AI assistants.
 
 ## Installation
 
+### npm (recommended)
+
+```bash
+npm install -g @standardbeagle/lci
+```
+
+### pip
+
+```bash
+pip install lightning-code-index
+```
+
+### Homebrew (coming soon)
+
+```bash
+brew install standardbeagle/tap/lci
+```
+
 ### From Source
 
 ```bash
