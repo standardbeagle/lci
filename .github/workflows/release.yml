@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -28,7 +29,7 @@ jobs:
             goarch: arm64
             artifact: lci_darwin_arm64
             binary: lci
-          - os: macos-13-large
+          - os: macos-latest
             goos: darwin
             goarch: amd64
             artifact: lci_darwin_amd64
@@ -58,8 +59,18 @@ jobs:
 
       - name: Build binary
         shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
         run: |
-          CGO_ENABLED=1 go build \
+          # For macOS cross-compilation (arm64 to amd64), set the target
+          if [ "$GOOS" = "darwin" ] && [ "$GOARCH" = "amd64" ] && [ "$(uname -m)" = "arm64" ]; then
+            export CGO_CFLAGS="-arch x86_64"
+            export CGO_LDFLAGS="-arch x86_64"
+          fi
+
+          go build \
             -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o ${{ matrix.binary }} \
             ./cmd/lci
