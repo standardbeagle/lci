@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,9 +21,16 @@ import (
 	"github.com/standardbeagle/lci/internal/types"
 )
 
+// getTestSocketPath returns a unique socket path for the given test
+func getTestSocketPath(t *testing.T) string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("lci-test-%s.sock", t.Name()))
+}
+
 // TestServerIntegration_BasicLifecycle tests server start, query, and shutdown
 func TestServerIntegration_BasicLifecycle(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create initial test file
 	initialContent := `package test
@@ -46,9 +54,10 @@ func TestFunction() string {
 		},
 	}
 
-	// Create and start server
+	// Create and start server with custom socket path
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 
 	err = srv.Start()
 	require.NoError(t, err)
@@ -56,8 +65,8 @@ func TestFunction() string {
 	// Give indexing time to complete
 	time.Sleep(2 * time.Second)
 
-	// Create client and connect
-	client := NewClient()
+	// Create client with custom socket path and connect
+	client := NewClientWithSocket(socketPath)
 	require.True(t, client.IsServerRunning(), "Server should be running")
 
 	// Wait for index to be ready
@@ -104,6 +113,8 @@ func TestFunction() string {
 // TestServerIntegration_ManualFileUpdate tests manual file updates via IndexFile
 func TestServerIntegration_ManualFileUpdate(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create initial test file
 	initialContent := `package test
@@ -130,6 +141,7 @@ func OriginalFunction() string {
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 
 	err = srv.Start()
 	require.NoError(t, err)
@@ -138,7 +150,7 @@ func OriginalFunction() string {
 	// Wait for initial index
 	time.Sleep(2 * time.Second)
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	err = client.WaitForReady(10 * time.Second)
 	require.NoError(t, err)
 
@@ -180,6 +192,8 @@ func UpdatedFunction() string {
 // TestServerIntegration_MultipleClients tests multiple clients sharing the same index
 func TestServerIntegration_MultipleClients(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create test files
 	file1Content := `package test
@@ -207,6 +221,7 @@ func File2Function() {}
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
@@ -214,9 +229,9 @@ func File2Function() {}
 	time.Sleep(2 * time.Second)
 
 	// Create multiple clients
-	client1 := NewClient()
-	client2 := NewClient()
-	client3 := NewClient()
+	client1 := NewClientWithSocket(socketPath)
+	client2 := NewClientWithSocket(socketPath)
+	client3 := NewClientWithSocket(socketPath)
 
 	// All clients should connect
 	assert.True(t, client1.IsServerRunning())
@@ -257,6 +272,8 @@ func File2Function() {}
 // TestServerIntegration_ConcurrentSearches tests concurrent searches from multiple clients
 func TestServerIntegration_ConcurrentSearches(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create test file with multiple functions
 	content := `package test
@@ -284,13 +301,14 @@ func Function5() {}
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
 	time.Sleep(2 * time.Second)
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	err = client.WaitForReady(10 * time.Second)
 	require.NoError(t, err)
 
@@ -322,6 +340,8 @@ func Function5() {}
 // TestServerIntegration_ExternalIndexWithMCP tests using an externally managed index (MCP scenario)
 func TestServerIntegration_ExternalIndexWithMCP(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create test file
 	content := `package test
@@ -358,13 +378,14 @@ func ExternalFunction() string {
 	// Create server with external index
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
 	// Index should be immediately ready (no background indexing)
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	assert.True(t, client.IsServerRunning())
 
 	// Search should work immediately
@@ -376,6 +397,8 @@ func ExternalFunction() string {
 // TestServerIntegration_FileAddition tests adding a new file to an existing index
 func TestServerIntegration_FileAddition(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create initial file
 	initialContent := `package test
@@ -398,13 +421,14 @@ func InitialFunction() {}
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
 	time.Sleep(2 * time.Second)
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	err = client.WaitForReady(10 * time.Second)
 	require.NoError(t, err)
 
@@ -442,6 +466,8 @@ func NewlyAddedFunction() {}
 // TestServerIntegration_FileDeletion tests removing a file from the index
 func TestServerIntegration_FileDeletion(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create two files
 	keep := `package test
@@ -472,13 +498,14 @@ func DeleteFunction() {}
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
 	time.Sleep(2 * time.Second)
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	err = client.WaitForReady(10 * time.Second)
 	require.NoError(t, err)
 
@@ -516,6 +543,8 @@ func DeleteFunction() {}
 // TestServerIntegration_ReindexCommand tests the reindex endpoint
 func TestServerIntegration_ReindexCommand(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create initial file
 	content := `package test
@@ -539,13 +568,14 @@ func OriginalFunction() {}
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
 	time.Sleep(2 * time.Second)
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	err = client.WaitForReady(10 * time.Second)
 	require.NoError(t, err)
 
@@ -586,6 +616,8 @@ func ReindexedFunction() {}
 // TestServerIntegration_StatusEndpoint tests the status endpoint
 func TestServerIntegration_StatusEndpoint(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create test file
 	content := `package test
@@ -608,11 +640,12 @@ func StatusTestFunction() {}
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 
 	// Initial status might show indexing active
 	status, err := client.GetStatus()
@@ -633,6 +666,8 @@ func StatusTestFunction() {}
 // TestServerIntegration_PingEndpoint tests server health check
 func TestServerIntegration_PingEndpoint(t *testing.T) {
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	cfg := &config.Config{
 		Project: config.Project{
@@ -647,11 +682,12 @@ func TestServerIntegration_PingEndpoint(t *testing.T) {
 
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 
 	// Ping should succeed
 	ping, err := client.Ping()

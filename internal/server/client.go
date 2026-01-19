@@ -20,10 +20,13 @@ type Client struct {
 	socketPath string
 }
 
-// NewClient creates a new client connection to the index server
+// NewClient creates a new client connection to the index server using the default socket path
 func NewClient() *Client {
-	socketPath := GetSocketPath()
+	return NewClientWithSocket(GetSocketPath())
+}
 
+// NewClientWithSocket creates a new client connection to the index server with a custom socket path
+func NewClientWithSocket(socketPath string) *Client {
 	// Create HTTP client that uses Unix socket
 	httpClient := &http.Client{
 		Transport: &http.Transport{

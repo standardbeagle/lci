@@ -29,13 +29,17 @@ func serverCommand(c *cli.Context) error {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
 
+	// Set project-specific socket path
+	socketPath := server.GetSocketPathForRoot(cfg.Project.Root)
+	srv.SetSocketPath(socketPath)
+
 	// Start server
 	if err := srv.Start(); err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
 	fmt.Printf("Index server started successfully\n")
-	fmt.Printf("Socket: %s\n", server.GetSocketPath())
+	fmt.Printf("Socket: %s\n", socketPath)
 	fmt.Printf("Root: %s\n", cfg.Project.Root)
 	fmt.Printf("\nUse 'lci shutdown' to stop the server\n")
 
@@ -72,16 +76,24 @@ func serverCommand(c *cli.Context) error {
 
 // shutdownCommand sends a shutdown request to the running server
 func shutdownCommand(c *cli.Context) error {
-	client := server.NewClient()
+	// Load configuration to get project root
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return err
+	}
+
+	// Get project-specific socket path
+	socketPath := server.GetSocketPathForRoot(cfg.Project.Root)
+	client := server.NewClientWithSocket(socketPath)
 
 	// Check if server is running
 	if !client.IsServerRunning() {
-		return fmt.Errorf("no server is running")
+		return fmt.Errorf("no server is running for root: %s", cfg.Project.Root)
 	}
 
 	force := c.Bool("force")
 
-	fmt.Println("Shutting down server...")
+	fmt.Printf("Shutting down server for root: %s\n", cfg.Project.Root)
 	if err := client.Shutdown(force); err != nil {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
@@ -98,10 +110,13 @@ func shutdownCommand(c *cli.Context) error {
 }
 
 // ensureServerRunning checks if the index server is running, and starts it if not
+// It uses a project-specific socket path based on the configured root directory
 func ensureServerRunning(cfg *config.Config) (*server.Client, error) {
-	client := server.NewClient()
+	// Get project-specific socket path
+	socketPath := server.GetSocketPathForRoot(cfg.Project.Root)
+	client := server.NewClientWithSocket(socketPath)
 
-	// Check if server is already running
+	// Check if server is already running for this project
 	if client.IsServerRunning() {
 		return client, nil
 	}
@@ -115,8 +130,12 @@ func ensureServerRunning(cfg *config.Config) (*server.Client, error) {
 		return nil, fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Start server as daemon
-	cmd := exec.Command(executable, "server")
+	// Start server as daemon with the correct root directory
+	args := []string{"server"}
+	if cfg.Project.Root != "" && cfg.Project.Root != "." {
+		args = append([]string{"--root", cfg.Project.Root}, args...)
+	}
+	cmd := exec.Command(executable, args...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil

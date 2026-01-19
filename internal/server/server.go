@@ -32,6 +32,7 @@ type IndexServer struct {
 	mu             sync.RWMutex
 	running        bool
 	indexingActive bool
+	socketPath     string // Custom socket path (empty uses default)
 }
 
 // NewIndexServer creates a new persistent index server
@@ -65,11 +66,44 @@ func NewIndexServerWithIndex(cfg *config.Config, indexer *indexing.MasterIndex, 
 	}, nil
 }
 
-// GetSocketPath returns the path to the Unix socket for this server
+// GetSocketPath returns the default path to the Unix socket (for backwards compatibility)
 func GetSocketPath() string {
 	// Use temp directory for socket
 	tmpDir := os.TempDir()
 	return filepath.Join(tmpDir, "lci-server.sock")
+}
+
+// GetSocketPathForRoot returns a project-specific socket path based on the root directory
+// This allows multiple servers to run for different projects simultaneously
+func GetSocketPathForRoot(root string) string {
+	if root == "" {
+		return GetSocketPath()
+	}
+	// Create a hash of the absolute path to generate a unique socket name
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return GetSocketPath()
+	}
+	// Use a simple hash to create a unique but deterministic socket name
+	hash := uint32(0)
+	for _, c := range absRoot {
+		hash = hash*31 + uint32(c)
+	}
+	tmpDir := os.TempDir()
+	return filepath.Join(tmpDir, fmt.Sprintf("lci-server-%08x.sock", hash))
+}
+
+// SetSocketPath sets a custom socket path for this server (used for testing)
+func (s *IndexServer) SetSocketPath(path string) {
+	s.socketPath = path
+}
+
+// GetServerSocketPath returns the socket path this server is using
+func (s *IndexServer) GetServerSocketPath() string {
+	if s.socketPath != "" {
+		return s.socketPath
+	}
+	return GetSocketPath()
 }
 
 // Start begins listening for client connections
@@ -83,7 +117,7 @@ func (s *IndexServer) Start() error {
 	s.mu.Unlock()
 
 	// Remove existing socket if present
-	socketPath := GetSocketPath()
+	socketPath := s.GetServerSocketPath()
 	os.Remove(socketPath)
 
 	// Create Unix socket listener
@@ -372,7 +406,7 @@ func (s *IndexServer) Shutdown(ctx context.Context) error {
 	}
 
 	// Remove socket file
-	os.Remove(GetSocketPath())
+	os.Remove(s.GetServerSocketPath())
 
 	debug.LogMCP("Index server shut down cleanly")
 	runtime.GC() // Force GC to release memory

@@ -106,8 +106,11 @@ func findLciBinary() (string, error) {
 
 	for _, candidate := range candidates {
 		if absPath, err := filepath.Abs(candidate); err == nil {
-			if _, err := os.Stat(absPath); err == nil {
-				return absPath, nil
+			if info, err := os.Stat(absPath); err == nil {
+				// Ensure it's a regular file, not a directory
+				if info.Mode().IsRegular() {
+					return absPath, nil
+				}
 			}
 		}
 	}
