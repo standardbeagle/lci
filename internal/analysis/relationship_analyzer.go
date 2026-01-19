@@ -107,8 +107,14 @@ func (ra *RelationshipAnalyzer) initializeLanguageAnalyzers() {
 		switch language {
 		case "go":
 			ra.languageAnalyzers[language] = NewGoAnalyzer()
-		case "javascript", "typescript":
+		case "javascript":
+			// Use hybrid analyzer: go-fAST for ES5/CommonJS, regex fallback for ES6 modules
+			ra.languageAnalyzers[language] = NewJavaScriptHybridAnalyzer()
+		case "typescript":
+			// TypeScript still uses regex-based analyzer (go-fAST doesn't support TS)
 			ra.languageAnalyzers[language] = NewJavaScriptAnalyzer()
+		case "python":
+			ra.languageAnalyzers[language] = NewPythonAnalyzer()
 		}
 	}
 }

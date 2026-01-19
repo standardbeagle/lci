@@ -50,7 +50,7 @@ type AnalysisParams struct {
 func DefaultAnalysisParams() AnalysisParams {
 	return AnalysisParams{
 		Scope:               ScopeStaged,
-		Focus:               []string{"duplicates", "naming"},
+		Focus:               []string{"duplicates", "naming", "metrics"},
 		SimilarityThreshold: 0.8,
 		MaxFindings:         20,
 	}
@@ -158,6 +158,18 @@ type SymbolInfo struct {
 	// Complexity is the cyclomatic complexity (if available)
 	Complexity int `json:"complexity,omitempty"`
 
+	// LinesOfCode is the number of lines in the function/method
+	LinesOfCode int `json:"lines_of_code,omitempty"`
+
+	// NestingDepth is the maximum nesting depth
+	NestingDepth int `json:"nesting_depth,omitempty"`
+
+	// IsPure indicates if the function has no side effects
+	IsPure bool `json:"is_pure,omitempty"`
+
+	// SideEffects lists the detected side effect categories (e.g., "param-write", "io", "global-write")
+	SideEffects []string `json:"side_effects,omitempty"`
+
 	// Content is the symbol's code content (for duplicate detection)
 	Content string `json:"-"`
 }
@@ -193,6 +205,90 @@ const (
 	// NamingIssueAbbreviation indicates abbreviation inconsistency (getUsr vs getUser)
 	NamingIssueAbbreviation NamingIssueType = "abbreviation"
 )
+
+// MetricsIssueType categorizes function metrics issues
+type MetricsIssueType string
+
+const (
+	// MetricsIssueHighComplexity indicates cyclomatic complexity exceeds threshold
+	MetricsIssueHighComplexity MetricsIssueType = "high_complexity"
+
+	// MetricsIssueLongFunction indicates function has too many lines
+	MetricsIssueLongFunction MetricsIssueType = "long_function"
+
+	// MetricsIssueDeepNesting indicates excessive nesting depth
+	MetricsIssueDeepNesting MetricsIssueType = "deep_nesting"
+
+	// MetricsIssueComplexityGrew indicates complexity increased significantly
+	MetricsIssueComplexityGrew MetricsIssueType = "complexity_grew"
+
+	// MetricsIssuePurityLost indicates a previously pure function became impure
+	MetricsIssuePurityLost MetricsIssueType = "purity_lost"
+
+	// MetricsIssueImpureFunction indicates a new function has side effects
+	MetricsIssueImpureFunction MetricsIssueType = "impure_function"
+)
+
+// MetricsThresholds defines thresholds for metrics analysis
+type MetricsThresholds struct {
+	// HighComplexity is the cyclomatic complexity threshold (default: 10)
+	HighComplexity int
+
+	// LongFunction is the lines of code threshold (default: 100)
+	LongFunction int
+
+	// DeepNesting is the nesting depth threshold (default: 4)
+	DeepNesting int
+
+	// ComplexityGrowthThreshold is the percentage increase to flag (default: 50)
+	ComplexityGrowthThreshold int
+}
+
+// DefaultMetricsThresholds returns sensible defaults for metrics analysis
+func DefaultMetricsThresholds() MetricsThresholds {
+	return MetricsThresholds{
+		HighComplexity:            10,
+		LongFunction:              100,
+		DeepNesting:               4,
+		ComplexityGrowthThreshold: 50,
+	}
+}
+
+// SymbolMetrics captures metrics for a function/method
+type SymbolMetrics struct {
+	Complexity   int      `json:"complexity"`
+	LinesOfCode  int      `json:"lines_of_code"`
+	NestingDepth int      `json:"nesting_depth"`
+	IsPure       bool     `json:"is_pure,omitempty"`
+	SideEffects  []string `json:"side_effects,omitempty"`
+}
+
+// MetricsFinding represents a metrics-related issue in changed code
+type MetricsFinding struct {
+	// Severity indicates how critical this finding is
+	Severity FindingSeverity `json:"severity"`
+
+	// Description is a human-readable description of the issue
+	Description string `json:"description"`
+
+	// Symbol is the function/method with the metrics issue
+	Symbol SymbolInfo `json:"symbol"`
+
+	// IssueType categorizes the metrics problem
+	IssueType MetricsIssueType `json:"issue_type"`
+
+	// Issue is a short issue summary
+	Issue string `json:"issue"`
+
+	// Suggestion provides guidance on fixing the issue
+	Suggestion string `json:"suggestion"`
+
+	// OldMetrics contains the previous metrics (for modified symbols)
+	OldMetrics *SymbolMetrics `json:"old_metrics,omitempty"`
+
+	// NewMetrics contains the current metrics
+	NewMetrics *SymbolMetrics `json:"new_metrics,omitempty"`
+}
 
 // CaseStyle represents a naming convention style
 type CaseStyle string

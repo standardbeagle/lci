@@ -355,10 +355,17 @@ type ReferenceInfo struct {
 	OutgoingCount int `json:"outgoing_count"` // Number of references from this symbol
 }
 
+// ObjectLookupError represents a failed lookup for a specific object ID
+type ObjectLookupError struct {
+	ObjectID string `json:"object_id"`
+	Error    string `json:"error"`
+}
+
 // ContextResponse represents a response containing multiple object contexts
 type ContextResponse struct {
-	Contexts []ObjectContext `json:"contexts"`
-	Count    int             `json:"count"`
+	Contexts []ObjectContext     `json:"contexts"`
+	Count    int                 `json:"count"`
+	Errors   []ObjectLookupError `json:"errors,omitempty"` // Failed lookups are reported, not silently dropped
 }
 
 // ObjectContext represents a simplified context object for compact formatting
@@ -1738,6 +1745,100 @@ func (s *Server) registerTools() {
 			Required: []string{"operation"},
 		},
 	}, s.handleContext)
+
+	// Index status and management tool - provides visibility into index health
+	s.server.AddTool(&mcp.Tool{
+		Name:        "index_stats",
+		Description: "📊 Comprehensive index status and health monitoring. Shows indexing progress, component health, memory usage, and file watcher status. Use this to diagnose 'index not ready' issues or understand why searches return empty. Modes: summary, detailed, progress, health. See 'info index_stats'.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"mode": {
+					Type:        "string",
+					Description: "Query mode: 'summary' (default), 'detailed', 'progress', 'health'",
+				},
+				"include_memory": {
+					Type:        "boolean",
+					Description: "Include memory usage statistics (default: false for summary)",
+				},
+				"include_watch_mode": {
+					Type:        "boolean",
+					Description: "Include file watcher status (default: false for summary)",
+				},
+				"include_components": {
+					Type:        "boolean",
+					Description: "Include per-component health (default: false for summary)",
+				},
+			},
+		},
+	}, s.handleIndexStats)
+
+	// Debug information tool - deep diagnostics for troubleshooting
+	s.server.AddTool(&mcp.Tool{
+		Name:        "debug_info",
+		Description: "🔬 Deep debug information for troubleshooting index issues. Shows symbol distribution, type breakdown, reference statistics, and file-level details. Use when index_stats shows problems or when relationships return empty. Modes: overview, symbols, references, types, files. See 'info debug_info'.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"mode": {
+					Type:        "string",
+					Description: "Debug mode: 'overview' (default), 'symbols', 'references', 'types', 'files'",
+				},
+				"file_id": {
+					Type:        "integer",
+					Description: "File ID to debug (for 'files' mode)",
+				},
+				"file_path": {
+					Type:        "string",
+					Description: "File path to debug (for 'files' mode)",
+				},
+				"max_results": {
+					Type:        "integer",
+					Description: "Maximum results for lists (default: 20)",
+				},
+				"verbose": {
+					Type:        "boolean",
+					Description: "Include detailed symbol info (for 'files' mode)",
+				},
+			},
+		},
+	}, s.handleDebugInfo)
+
+	// Git analysis tool - analyze git changes for duplicates, naming issues, and metrics
+	s.server.AddTool(&mcp.Tool{
+		Name:        "git_analysis",
+		Description: "🔍 Analyze git changes for code quality issues. Compares new/modified code against the existing codebase to find duplicates, naming inconsistencies, and function complexity issues. Scopes: 'staged' (default), 'wip', 'commit', 'range'. Focus areas: duplicates, naming, metrics. Use before committing to catch issues early. See 'info git_analysis'.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"scope": {
+					Type:        "string",
+					Description: "Analysis scope: 'staged' (default), 'wip' (all uncommitted), 'commit' (specific commit), 'range' (commit range)",
+				},
+				"base_ref": {
+					Type:        "string",
+					Description: "Base git reference for commit/range scope (e.g., 'HEAD~1', 'main')",
+				},
+				"target_ref": {
+					Type:        "string",
+					Description: "Target git reference for range scope (defaults to HEAD)",
+				},
+				"focus": {
+					Type:        "array",
+					Items:       &jsonschema.Schema{Type: "string"},
+					Description: "Analysis areas to focus on: 'duplicates', 'naming', 'metrics' (defaults to all)",
+				},
+				"similarity_threshold": {
+					Type:        "number",
+					Description: "Similarity threshold for duplicate detection (0.0-1.0, default: 0.8)",
+				},
+				"max_findings": {
+					Type:        "integer",
+					Description: "Maximum findings to return per category (default: 20)",
+				},
+			},
+		},
+	}, s.handleGitAnalysis)
 
 }
 

@@ -161,3 +161,19 @@ type TreeResponse struct {
 	Tree  *types.FunctionTree `json:"tree,omitempty"`
 	Error string              `json:"error,omitempty"`
 }
+
+// GitAnalyzeRequest requests git change analysis
+type GitAnalyzeRequest struct {
+	Scope               string   `json:"scope"`                 // staged, wip, commit, range
+	BaseRef             string   `json:"base_ref,omitempty"`
+	TargetRef           string   `json:"target_ref,omitempty"`
+	Focus               []string `json:"focus,omitempty"`       // duplicates, naming, metrics
+	SimilarityThreshold float64  `json:"similarity_threshold,omitempty"`
+	MaxFindings         int      `json:"max_findings,omitempty"`
+}
+
+// GitAnalyzeResponse contains the git analysis report
+type GitAnalyzeResponse struct {
+	Report interface{} `json:"report,omitempty"` // *git.AnalysisReport
+	Error  string      `json:"error,omitempty"`
+}

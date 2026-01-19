@@ -65,8 +65,8 @@ func TestDefaultAnalysisParams(t *testing.T) {
 		t.Errorf("DefaultAnalysisParams().Scope = %v, want %v", params.Scope, ScopeStaged)
 	}
 
-	if len(params.Focus) != 2 {
-		t.Errorf("DefaultAnalysisParams().Focus length = %d, want 2", len(params.Focus))
+	if len(params.Focus) != 3 {
+		t.Errorf("DefaultAnalysisParams().Focus length = %d, want 3 (duplicates, naming, metrics)", len(params.Focus))
 	}
 
 	if params.SimilarityThreshold != 0.8 {

@@ -37,6 +37,8 @@ brew install standardbeagle/tap/lci
 
 ### From Source
 
+Requires Go 1.24 or later (for go-fast JavaScript parser support).
+
 ```bash
 go install github.com/standardbeagle/lci/cmd/lci@latest
 ```

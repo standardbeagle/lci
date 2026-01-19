@@ -13,6 +13,9 @@ type AnalysisReport struct {
 	// NamingIssues contains naming consistency findings
 	NamingIssues []NamingFinding `json:"naming_issues,omitempty"`
 
+	// MetricsIssues contains function metrics findings
+	MetricsIssues []MetricsFinding `json:"metrics_issues,omitempty"`
+
 	// Metadata provides analysis context
 	Metadata ReportMetadata `json:"metadata"`
 }
@@ -36,6 +39,9 @@ type ReportSummary struct {
 
 	// NamingIssuesFound is the count of naming issues
 	NamingIssuesFound int `json:"naming_issues_found"`
+
+	// MetricsIssuesFound is the count of function metrics issues
+	MetricsIssuesFound int `json:"metrics_issues_found"`
 
 	// RiskScore indicates overall risk (0.0 = safe, 1.0 = risky)
 	RiskScore float64 `json:"risk_score"`
@@ -129,10 +135,13 @@ type ReportMetadata struct {
 
 	// TotalNamingIssues is the actual count before truncation
 	TotalNamingIssues int `json:"total_naming_issues,omitempty"`
+
+	// TotalMetricsIssues is the actual count before truncation
+	TotalMetricsIssues int `json:"total_metrics_issues,omitempty"`
 }
 
 // CalculateRiskScore computes an overall risk score based on findings
-func CalculateRiskScore(duplicates []DuplicateFinding, namingIssues []NamingFinding) float64 {
+func CalculateRiskScore(duplicates []DuplicateFinding, namingIssues []NamingFinding, metricsIssues []MetricsFinding) float64 {
 	risk := 0.0
 
 	// Weight duplicates by severity
@@ -154,6 +163,18 @@ func CalculateRiskScore(duplicates []DuplicateFinding, namingIssues []NamingFind
 			risk += 0.10
 		case SeverityWarning:
 			risk += 0.05
+		case SeverityInfo:
+			risk += 0.02
+		}
+	}
+
+	// Weight metrics issues by severity
+	for _, issue := range metricsIssues {
+		switch issue.Severity {
+		case SeverityCritical:
+			risk += 0.12
+		case SeverityWarning:
+			risk += 0.06
 		case SeverityInfo:
 			risk += 0.02
 		}
@@ -197,11 +218,18 @@ func DetermineNamingSeverity(issueType NamingIssueType, similarity float64) Find
 }
 
 // GenerateTopRecommendation creates the highest-priority recommendation
-func GenerateTopRecommendation(duplicates []DuplicateFinding, namingIssues []NamingFinding) string {
+func GenerateTopRecommendation(duplicates []DuplicateFinding, namingIssues []NamingFinding, metricsIssues []MetricsFinding) string {
 	// Check for critical duplicates first
 	for _, dup := range duplicates {
 		if dup.Severity == SeverityCritical {
 			return dup.Suggestion
+		}
+	}
+
+	// Then critical metrics issues (high complexity is important)
+	for _, issue := range metricsIssues {
+		if issue.Severity == SeverityCritical {
+			return issue.Suggestion
 		}
 	}
 
@@ -217,10 +245,44 @@ func GenerateTopRecommendation(duplicates []DuplicateFinding, namingIssues []Nam
 		return duplicates[0].Suggestion
 	}
 
+	// Then any metrics issue
+	if len(metricsIssues) > 0 {
+		return metricsIssues[0].Suggestion
+	}
+
 	// Then any naming issue
 	if len(namingIssues) > 0 {
 		return namingIssues[0].Suggestion
 	}
 
 	return ""
+}
+
+// DetermineMetricsSeverity determines severity based on metrics thresholds
+func DetermineMetricsSeverity(issueType MetricsIssueType, metrics SymbolMetrics, thresholds MetricsThresholds) FindingSeverity {
+	switch issueType {
+	case MetricsIssueHighComplexity:
+		if metrics.Complexity > thresholds.HighComplexity*2 {
+			return SeverityCritical
+		}
+		return SeverityWarning
+	case MetricsIssueLongFunction:
+		if metrics.LinesOfCode > thresholds.LongFunction*2 {
+			return SeverityCritical
+		}
+		return SeverityWarning
+	case MetricsIssueDeepNesting:
+		if metrics.NestingDepth > thresholds.DeepNesting+2 {
+			return SeverityCritical
+		}
+		return SeverityWarning
+	case MetricsIssueComplexityGrew:
+		return SeverityWarning
+	case MetricsIssuePurityLost:
+		return SeverityWarning
+	case MetricsIssueImpureFunction:
+		return SeverityInfo
+	default:
+		return SeverityInfo
+	}
 }

@@ -15,6 +15,7 @@ require (
 	github.com/sblinch/kdl-go v0.0.0-20240410000746-21754ba9ac55
 	github.com/stretchr/testify v1.11.1
 	github.com/surgebase/porter2 v0.0.0-20150829210152-56e4718818e8
+	github.com/t14raptor/go-fast v0.0.4
 	github.com/tree-sitter-grammars/tree-sitter-zig v1.1.2
 	github.com/tree-sitter/go-tree-sitter v0.24.0
 	github.com/tree-sitter/tree-sitter-c-sharp v0.23.1
@@ -36,6 +37,8 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-pointer v0.0.1 // indirect
+	github.com/nukilabs/ftoa v1.0.0 // indirect
+	github.com/nukilabs/unicodeid v0.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/surge/glog v0.0.0-20141108051140-2578deb2b95c // indirect

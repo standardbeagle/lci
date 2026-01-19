@@ -545,3 +545,21 @@ func (c *CachedMetricsCalculator) UpdateCacheTTL(ttl time.Duration) {
 		c.cache.UpdateTTL(ttl)
 	}
 }
+
+// CalculateCyclomaticComplexity calculates cyclomatic complexity for a node
+// Exported for use by git change analyzer
+func (c *CachedMetricsCalculator) CalculateCyclomaticComplexity(node *tree_sitter.Node) int {
+	return c.calculateCyclomaticComplexity(node)
+}
+
+// CalculateNestingDepth calculates the maximum nesting depth for a node
+// Exported for use by git change analyzer
+func (c *CachedMetricsCalculator) CalculateNestingDepth(node *tree_sitter.Node, currentDepth int) int {
+	return c.calculateNestingDepth(node, currentDepth)
+}
+
+// CalculateLinesOfCode calculates the lines of code for a node
+// Exported for use by git change analyzer
+func (c *CachedMetricsCalculator) CalculateLinesOfCode(node *tree_sitter.Node) int {
+	return c.calculateLinesOfCode(node)
+}

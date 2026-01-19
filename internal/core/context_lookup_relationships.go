@@ -119,7 +119,7 @@ func (cle *ContextLookupEngine) fillDirectRelationships(context *CodeObjectConte
 
 // getIncomingReferences finds all objects that reference the target object
 func (cle *ContextLookupEngine) getIncomingReferences(objectID CodeObjectID) ([]ObjectReference, error) {
-	var references []ObjectReference
+	references := []ObjectReference{}
 
 	// Find the symbol by name in the reference tracker
 	symbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -178,7 +178,7 @@ func (cle *ContextLookupEngine) getIncomingReferences(objectID CodeObjectID) ([]
 
 // getOutgoingReferences finds all objects referenced by the target object
 func (cle *ContextLookupEngine) getOutgoingReferences(objectID CodeObjectID) ([]ObjectReference, error) {
-	var references []ObjectReference
+	references := []ObjectReference{}
 
 	// Find the symbol by name in the reference tracker
 	symbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -239,10 +239,10 @@ func (cle *ContextLookupEngine) getOutgoingReferences(objectID CodeObjectID) ([]
 // getCallerFunctions finds all functions that call the target function
 func (cle *ContextLookupEngine) getCallerFunctions(objectID CodeObjectID) ([]ObjectReference, error) {
 	if objectID.Type != types.SymbolTypeFunction && objectID.Type != types.SymbolTypeMethod {
-		return nil, nil
+		return []ObjectReference{}, nil
 	}
 
-	var callers []ObjectReference
+	callers := []ObjectReference{}
 
 	// Find the symbol by name in the reference tracker
 	symbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -310,10 +310,10 @@ func (cle *ContextLookupEngine) getCallerFunctions(objectID CodeObjectID) ([]Obj
 // getCalledFunctions finds all functions called by the target function
 func (cle *ContextLookupEngine) getCalledFunctions(objectID CodeObjectID) ([]ObjectReference, error) {
 	if objectID.Type != types.SymbolTypeFunction && objectID.Type != types.SymbolTypeMethod {
-		return nil, nil
+		return []ObjectReference{}, nil
 	}
 
-	var called []ObjectReference
+	called := []ObjectReference{}
 
 	// Find the symbol by name in the reference tracker
 	symbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -380,7 +380,7 @@ func (cle *ContextLookupEngine) getCalledFunctions(objectID CodeObjectID) ([]Obj
 
 // getParentObjects finds parent objects (namespaces, classes, functions)
 func (cle *ContextLookupEngine) getParentObjects(objectID CodeObjectID) ([]ObjectReference, error) {
-	var parents []ObjectReference
+	parents := []ObjectReference{}
 
 	// Find the symbol by name in the reference tracker
 	symbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -459,7 +459,7 @@ func convertScopeTypeToSymbolType(scopeType types.ScopeType) types.SymbolType {
 
 // getChildObjects finds child objects (member functions, nested types)
 func (cle *ContextLookupEngine) getChildObjects(objectID CodeObjectID) ([]ObjectReference, error) {
-	var children []ObjectReference
+	children := []ObjectReference{}
 
 	// For classes, find methods and fields
 	if objectID.Type == types.SymbolTypeClass {
@@ -606,7 +606,7 @@ func deduplicateReferences(refs []ObjectReference) []ObjectReference {
 
 func (cle *ContextLookupEngine) getParentClasses(objectID CodeObjectID) ([]ObjectReference, error) {
 	// Find parent classes (embedded types in Go) for a struct
-	var parents []ObjectReference
+	parents := []ObjectReference{}
 
 	// Only structs can have parent classes (embedded types)
 	if objectID.Type != types.SymbolTypeStruct && objectID.Type != types.SymbolTypeClass {
@@ -745,7 +745,7 @@ func extractEmbeddedTypes(structNode *sitter.Node, source []byte) []string {
 
 func (cle *ContextLookupEngine) getImplementingTypes(objectID CodeObjectID) ([]ObjectReference, error) {
 	// Find all types that implement the given interface
-	var implementations []ObjectReference
+	implementations := []ObjectReference{}
 
 	// Only interfaces can have implementing types
 	if objectID.Type != types.SymbolTypeInterface {
@@ -982,7 +982,7 @@ func implementsInterface(interfaceMethods []string, typeMethods []string) bool {
 
 func (cle *ContextLookupEngine) getUsedTypes(objectID CodeObjectID) ([]ObjectReference, error) {
 	// Find types used by a function (parameter types, return types, variable types)
-	var usedTypes []ObjectReference
+	usedTypes := []ObjectReference{}
 
 	// Find the symbol in ReferenceTracker
 	symbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -1114,7 +1114,7 @@ func isBuiltInType(typeName string) bool {
 
 func (cle *ContextLookupEngine) getImportedModules(objectID CodeObjectID) ([]ModuleReference, error) {
 	// Find all imports in the file containing this object
-	var modules []ModuleReference
+	modules := []ModuleReference{}
 
 	// Get all symbols in the file
 	fileSymbols := cle.refTracker.GetFileEnhancedSymbols(objectID.FileID)
@@ -1199,7 +1199,7 @@ func extractImportFromSpec(specNode *sitter.Node, source []byte) []string {
 
 func (cle *ContextLookupEngine) getClassMethods(objectID CodeObjectID) ([]ObjectReference, error) {
 	// Find all methods for a class/struct
-	var methods []ObjectReference
+	methods := []ObjectReference{}
 
 	// Get all symbols in the file
 	fileSymbols := cle.refTracker.GetFileEnhancedSymbols(objectID.FileID)
@@ -1245,7 +1245,7 @@ func (cle *ContextLookupEngine) getClassMethods(objectID CodeObjectID) ([]Object
 
 func (cle *ContextLookupEngine) getClassFields(objectID CodeObjectID) ([]ObjectReference, error) {
 	// Find all fields for a class/struct
-	var fields []ObjectReference
+	fields := []ObjectReference{}
 
 	// First, find the class symbol to get its bounds
 	classSymbols := cle.refTracker.FindSymbolsByName(objectID.Name)
@@ -1347,7 +1347,7 @@ func extractStructFields(structNode *sitter.Node, source []byte) []string {
 
 func (cle *ContextLookupEngine) getModuleContents(objectID CodeObjectID) ([]ObjectReference, error) {
 	// Find all exported symbols in a module/package
-	var contents []ObjectReference
+	contents := []ObjectReference{}
 
 	// Get all symbols in the file
 	fileSymbols := cle.refTracker.GetFileEnhancedSymbols(objectID.FileID)

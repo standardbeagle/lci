@@ -617,6 +617,132 @@ func (s *Server) handleInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 			"performance": "<5ms typical search time",
 		})
 
+	case "index_stats":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "index_stats",
+			"description": "Comprehensive index status and health monitoring for diagnostics",
+			"when_to_use": []string{
+				"Diagnose 'index not ready' errors",
+				"Check if indexing is still in progress",
+				"Verify call graph is populated (for relationship queries)",
+				"Monitor memory usage and watch mode status",
+				"Debug empty search results",
+			},
+			"parameters": map[string]string{
+				"mode":               "Query mode: 'summary' (default), 'detailed', 'progress', 'health'",
+				"include_memory":     "Include memory usage statistics (default: false)",
+				"include_watch_mode": "Include file watcher status (default: false)",
+				"include_components": "Include per-component health status (default: false)",
+			},
+			"modes": map[string]string{
+				"summary":  "Quick overview: status, file/symbol counts, basic health",
+				"detailed": "Full details: memory, watch mode, all components",
+				"progress": "Indexing progress: files processed, estimated time",
+				"health":   "Component health: which indexes are ready, any issues",
+			},
+			"examples": map[string]interface{}{
+				"basic":           `{"mode": "summary"}`,
+				"check_health":    `{"mode": "health"}`,
+				"full_details":    `{"mode": "detailed"}`,
+				"during_indexing": `{"mode": "progress"}`,
+				"memory_check":    `{"mode": "summary", "include_memory": true}`,
+			},
+			"response_fields": map[string]string{
+				"status":           "'ready', 'indexing', 'error', or 'initializing'",
+				"file_count":       "Total indexed files",
+				"symbol_count":     "Total extracted symbols",
+				"component_health": "Health status of each index component",
+				"issues":           "Array of current problems (empty when healthy)",
+				"warnings":         "Non-fatal issues to be aware of",
+			},
+			"troubleshooting": []string{
+				"If status='indexing': wait for indexing to complete",
+				"If call_graph_populated=false: relationship queries will return empty",
+				"If side_effects_ready=false: purity analysis unavailable",
+				"Check 'issues' array for specific problems",
+			},
+		})
+
+	case "debug_info":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "debug_info",
+			"description": "Deep debug information for troubleshooting index issues",
+			"when_to_use": []string{
+				"index_stats shows problems but you need more detail",
+				"Relationship queries return empty unexpectedly",
+				"Need to understand symbol distribution",
+				"Debugging specific file indexing issues",
+			},
+			"parameters": map[string]string{
+				"mode":        "Debug mode: 'overview', 'symbols', 'references', 'types', 'files'",
+				"file_id":     "File ID to debug (for 'files' mode)",
+				"file_path":   "File path to debug (for 'files' mode)",
+				"max_results": "Maximum results for lists (default: 20)",
+				"verbose":     "Include detailed symbol info (for 'files' mode)",
+			},
+			"modes": map[string]string{
+				"overview":   "High-level stats: totals, averages, breakdowns",
+				"symbols":    "Symbol distribution by type",
+				"references": "Top referenced symbols (most connected)",
+				"types":      "Type distribution across codebase",
+				"files":      "File-level breakdown, optionally for specific file",
+			},
+			"examples": map[string]interface{}{
+				"overview":      `{"mode": "overview"}`,
+				"symbols":       `{"mode": "symbols"}`,
+				"top_refs":      `{"mode": "references", "max_results": 10}`,
+				"specific_file": `{"mode": "files", "file_path": "internal/mcp/server.go", "verbose": true}`,
+			},
+			"use_with": "Use index_stats first to identify issues, then debug_info for deeper analysis",
+		})
+
+	case "git_analysis":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "git_analysis",
+			"description": "Analyze git changes for code quality issues before committing",
+			"when_to_use": []string{
+				"Before committing to catch duplicate code",
+				"Check naming consistency with codebase conventions",
+				"Identify high-complexity functions in new code",
+				"Compare modified functions against their previous versions",
+				"Review code quality in staged changes or working directory",
+			},
+			"parameters": map[string]string{
+				"scope":                "Analysis scope: 'staged' (default), 'wip', 'commit', 'range'",
+				"base_ref":             "Base git reference for commit/range scope",
+				"target_ref":           "Target git reference for range scope",
+				"focus":                "Areas to analyze: 'duplicates', 'naming', 'metrics' (default: all)",
+				"similarity_threshold": "Similarity threshold for duplicates (0.0-1.0, default: 0.8)",
+				"max_findings":         "Maximum findings per category (default: 20)",
+			},
+			"scopes": map[string]string{
+				"staged": "Analyze only staged changes (git add)",
+				"wip":    "Analyze all uncommitted changes",
+				"commit": "Analyze a specific commit (use base_ref)",
+				"range":  "Analyze commit range (base_ref to target_ref)",
+			},
+			"focus_areas": map[string]string{
+				"duplicates": "Find code that duplicates existing functions",
+				"naming":     "Check naming consistency with codebase conventions",
+				"metrics":    "Check function complexity, length, nesting depth",
+			},
+			"examples": map[string]interface{}{
+				"staged_changes":   `{"scope": "staged"}`,
+				"all_uncommitted":  `{"scope": "wip"}`,
+				"duplicates_only":  `{"scope": "staged", "focus": ["duplicates"]}`,
+				"last_commit":      `{"scope": "commit", "base_ref": "HEAD~1"}`,
+				"high_sensitivity": `{"scope": "staged", "similarity_threshold": 0.7}`,
+				"commit_range":     `{"scope": "range", "base_ref": "main", "target_ref": "HEAD"}`,
+			},
+			"response_fields": map[string]string{
+				"summary":        "High-level stats: files changed, issues found, risk score",
+				"duplicates":     "Duplicate code findings with similarity scores",
+				"naming_issues":  "Naming consistency issues with suggestions",
+				"metrics_issues": "Function complexity/length issues with thresholds",
+				"metadata":       "Analysis context: refs, scope, timing",
+			},
+		})
+
 	default:
 		// Generic info about all tools
 		return createJSONResponse(map[string]interface{}{
@@ -629,6 +755,10 @@ func (s *Server) handleInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 				"context - save/load code manifests with callees+purity",
 				"semantic_annotations - find code by semantic tags",
 				"code_insight - comprehensive codebase analysis (includes git analysis modes)",
+				"side_effects - query function purity and side effects",
+				"index_stats - index status and health monitoring",
+				"debug_info - deep debug information for troubleshooting",
+				"git_analysis - analyze git changes for quality issues",
 				"info [tool] - help for specific tool (use 'info version' for server info)",
 			},
 			"quick_start": "Use 'search' tool with a pattern. Use 'info search' for details.",
@@ -1126,17 +1256,24 @@ type resultWithCoverage struct {
 // searchAndDeduplicate performs search and deduplicates results using a heap
 // for efficient sorted insertion. Boosts scores for results matching multiple patterns.
 // Uses map for O(1) deduplication and heap for O(log n) sorted insertion.
+// Returns error if ALL patterns fail - partial failures are tolerated.
 func (s *Server) searchAndDeduplicate(ctx context.Context, patterns []string, options types.SearchOptions) ([]searchtypes.DetailedResult, error) {
 	// Track results with pattern coverage count
 	// Key: file+line+match, Value: result with coverage info
 	resultCoverage := make(map[ResultKey]*resultWithCoverage)
 
+	// Track errors - if all patterns fail, report the errors
+	var searchErrors []string
+	successfulPatterns := 0
+
 	for _, pattern := range patterns {
 		patternResults, err := s.mcpConcurrentDetailedSearch(ctx, pattern, options)
 		if err != nil {
-			// Log error but continue with other patterns
+			// Collect error for potential reporting
+			searchErrors = append(searchErrors, fmt.Sprintf("pattern '%s': %v", pattern, err))
 			continue
 		}
+		successfulPatterns++
 
 		// Add results, tracking pattern coverage for duplicates
 		for i := range patternResults {
@@ -1161,6 +1298,11 @@ func (s *Server) searchAndDeduplicate(ctx context.Context, patterns []string, op
 				}
 			}
 		}
+	}
+
+	// If ALL patterns failed, return error with details
+	if successfulPatterns == 0 && len(searchErrors) > 0 {
+		return nil, fmt.Errorf("all search patterns failed: %s", strings.Join(searchErrors, "; "))
 	}
 
 	// Build heap with coverage-boosted scores
@@ -1954,8 +2096,17 @@ func (s *Server) handleGetObjectContext(ctx context.Context, req *mcp.CallToolRe
 
 	// Build context for each object using simplified ObjectContext type
 	contexts := make([]ObjectContext, 0, len(objectIDs))
+	var lookupErrors []ObjectLookupError
+
 	for _, objectID := range objectIDs {
-		objCtx := s.buildObjectContextCompact(ctx, objectID, &args)
+		objCtx, err := s.buildObjectContextCompactWithError(ctx, objectID, &args)
+		if err != nil {
+			lookupErrors = append(lookupErrors, ObjectLookupError{
+				ObjectID: objectID,
+				Error:    err.Error(),
+			})
+			continue
+		}
 		if objCtx != nil {
 			contexts = append(contexts, *objCtx)
 		}
@@ -1965,6 +2116,11 @@ func (s *Server) handleGetObjectContext(ctx context.Context, req *mcp.CallToolRe
 	response := ContextResponse{
 		Contexts: contexts,
 		Count:    len(contexts),
+	}
+
+	// If any lookups failed, report them in the response
+	if len(lookupErrors) > 0 {
+		response.Errors = lookupErrors
 	}
 
 	// Use compact format with minimal context to reduce token usage
@@ -2109,15 +2265,26 @@ func (s *Server) applyContextLookupMode(args *ObjectContextParams) {
 
 // buildObjectContextCompact creates a simplified ObjectContext for compact formatting.
 // Uses the Server's helper methods for clean symbol lookup.
+// DEPRECATED: Use buildObjectContextCompactWithError instead for proper error reporting
 func (s *Server) buildObjectContextCompact(ctx context.Context, objectID string, args *ObjectContextParams) *ObjectContext {
+	result, _ := s.buildObjectContextCompactWithError(ctx, objectID, args)
+	return result
+}
+
+// buildObjectContextCompactWithError creates a simplified ObjectContext with proper error reporting.
+// Returns an error instead of nil when lookup fails - never silently drops objects.
+func (s *Server) buildObjectContextCompactWithError(ctx context.Context, objectID string, args *ObjectContextParams) (*ObjectContext, error) {
 	// Use the Server's helper method for symbol lookup
 	enhancedSym := s.GetSymbol(objectID)
 	if enhancedSym == nil {
-		return nil
+		return nil, fmt.Errorf("symbol not found: object_id=%s (symbol may have been deleted or index is stale)", objectID)
 	}
 
 	// Get file path using helper
 	filePath := s.GetFilePath(enhancedSym.FileID)
+	if filePath == "" {
+		return nil, fmt.Errorf("file path not found for symbol: object_id=%s, file_id=%d", objectID, enhancedSym.FileID)
+	}
 
 	// Create simplified ObjectContext
 	result := &ObjectContext{
@@ -2148,7 +2315,7 @@ func (s *Server) buildObjectContextCompact(ctx context.Context, objectID string,
 		result.Purity = s.getPurityInfo(symbolID)
 	}
 
-	return result
+	return result, nil
 }
 
 // getPurityInfo retrieves purity analysis for a function symbol
@@ -2355,6 +2522,7 @@ func (s *Server) filterContextSections(context *core.CodeObjectContext, params *
 }
 
 // createContextMetadata creates metadata for context lookup result
+// Reports actual index state - never lies about capabilities
 func (s *Server) createContextMetadata() map[string]interface{} {
 	// Safe stats access with nil check
 	var stats map[string]interface{}
@@ -2367,14 +2535,73 @@ func (s *Server) createContextMetadata() map[string]interface{} {
 	// Get memory usage information
 	memoryInfo := s.getMemoryUsageInfo()
 
+	// Get actual index health status
+	indexHealth := s.getIndexHealthStatus()
+
 	return map[string]interface{}{
 		"index_size":      int64(getIntFromStats(stats, "total_size")),
 		"processed_files": getIntFromStats(stats, "file_count"),
 		"query_time":      s.formatDuration(s.getCurrentTimeMillis()),
 		"server_version":  version.Info(),
 		"memory_usage":    memoryInfo,
-		"ast_mode":        "temporary",
+		"index_health":    indexHealth,
 	}
+}
+
+// getIndexHealthStatus returns actual status of all index components
+// This replaces the fake "ast_mode: temporary" with real diagnostics
+func (s *Server) getIndexHealthStatus() map[string]interface{} {
+	health := map[string]interface{}{
+		"symbol_index_ready":     false,
+		"ref_tracker_ready":      false,
+		"call_graph_populated":   false,
+		"side_effects_ready":     false,
+		"issues":                 []string{},
+	}
+
+	issues := []string{}
+
+	if s.goroutineIndex == nil {
+		issues = append(issues, "FATAL: goroutine index not initialized")
+		health["issues"] = issues
+		return health
+	}
+
+	// Check symbol index
+	symbolIndex := s.goroutineIndex.GetSymbolIndex()
+	if symbolIndex != nil {
+		health["symbol_index_ready"] = true
+	} else {
+		issues = append(issues, "symbol index not available")
+	}
+
+	// Check reference tracker and call graph
+	refTracker := s.goroutineIndex.GetRefTracker()
+	if refTracker != nil {
+		health["ref_tracker_ready"] = true
+
+		// Check if call graph has actual data
+		if refTracker.HasRelationships() {
+			health["call_graph_populated"] = true
+		} else {
+			issues = append(issues, "call graph is empty - relationship queries will return no data")
+			// Add detailed stats for debugging
+			health["relationship_stats"] = refTracker.GetRelationshipStats()
+		}
+	} else {
+		issues = append(issues, "reference tracker not available - no relationship data")
+	}
+
+	// Check side effects propagator
+	sideEffectsPropagator := s.goroutineIndex.GetSideEffectPropagator()
+	if sideEffectsPropagator != nil {
+		health["side_effects_ready"] = true
+	} else {
+		issues = append(issues, "side effects analysis not available")
+	}
+
+	health["issues"] = issues
+	return health
 }
 
 // getMemoryUsageInfo collects memory usage statistics

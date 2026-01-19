@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	tree_sitter "github.com/tree-sitter/go-tree-sitter"
+
 	"github.com/standardbeagle/lci/internal/analysis"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/parser"
@@ -25,6 +27,7 @@ type Analyzer struct {
 	duplicateDetector *analysis.DuplicateDetector
 	fuzzyMatcher      *semantic.FuzzyMatcher
 	nameSplitter      *semantic.NameSplitter
+	metricsCalculator *analysis.CachedMetricsCalculator
 }
 
 // NewAnalyzer creates a new git change analyzer
@@ -36,6 +39,7 @@ func NewAnalyzer(provider *Provider, index *indexing.MasterIndex) *Analyzer {
 		duplicateDetector: analysis.NewDuplicateDetector(),
 		fuzzyMatcher:      semantic.NewFuzzyMatcher(true, 0.8, "jaro-winkler"),
 		nameSplitter:      semantic.NewNameSplitter(),
+		metricsCalculator: analysis.NewCachedMetricsCalculator(analysis.DefaultCachedMetricsConfig()),
 	}
 }
 
@@ -65,6 +69,7 @@ func (a *Analyzer) Analyze(ctx context.Context, params AnalysisParams) (*Analysi
 	// Perform analyses based on focus
 	var duplicates []DuplicateFinding
 	var namingIssues []NamingFinding
+	var metricsIssues []MetricsFinding
 
 	if params.HasFocus("duplicates") {
 		duplicates = a.findDuplicates(ctx, newSymbols, existingSymbols, params)
@@ -74,8 +79,12 @@ func (a *Analyzer) Analyze(ctx context.Context, params AnalysisParams) (*Analysi
 		namingIssues = a.checkNamingConsistency(ctx, newSymbols, existingSymbols, params)
 	}
 
+	if params.HasFocus("metrics") {
+		metricsIssues = a.checkFunctionMetrics(ctx, newSymbols, existingSymbols, params)
+	}
+
 	// Build report
-	report := a.buildReport(changedFiles, newSymbols, duplicates, namingIssues, params, startTime)
+	report := a.buildReport(changedFiles, newSymbols, duplicates, namingIssues, metricsIssues, params, startTime)
 
 	return report, nil
 }
@@ -85,6 +94,7 @@ func (a *Analyzer) parseChangedFiles(ctx context.Context, files []ChangedFile, p
 	var symbols []SymbolInfo
 
 	targetRef := a.provider.GetTargetRef(params)
+	computeMetrics := params.HasFocus("metrics")
 
 	for _, file := range files {
 		// Skip deleted files
@@ -104,24 +114,189 @@ func (a *Analyzer) parseChangedFiles(ctx context.Context, files []ChangedFile, p
 			continue
 		}
 
-		// Parse the file using TreeSitterParser
-		_, fileSymbols, _ := a.parser.ParseFile(file.Path, content)
+		// Parse the file using TreeSitterParser - get AST for metrics and side effects
+		tree, _, fileSymbols, _, _, _, _, _, sideEffects := a.parser.ParseFileWithSideEffects(ctx, file.Path, content, 0)
+
+		// Build a map of function nodes by line for efficient lookup
+		var functionNodes map[int]*tree_sitter.Node
+		if computeMetrics && tree != nil {
+			functionNodes = a.buildFunctionNodeMap(tree.RootNode())
+		}
 
 		// Convert to SymbolInfo
 		for _, sym := range fileSymbols {
-			symbols = append(symbols, SymbolInfo{
+			symInfo := SymbolInfo{
 				Name:     sym.Name,
 				Type:     sym.Type.String(),
 				FilePath: file.Path,
 				Line:     sym.Line,
 				EndLine:  sym.EndLine,
-				// Complexity is not available from basic Symbol parsing
-				Content: a.extractSymbolContent(content, sym),
-			})
+				Content:  a.extractSymbolContent(content, sym),
+			}
+
+			// Compute metrics for function/method symbols if enabled
+			if computeMetrics && (sym.Type.String() == "function" || sym.Type.String() == "method") {
+				if functionNodes != nil {
+					if node, ok := functionNodes[sym.Line]; ok && node != nil {
+						symInfo.Complexity = a.metricsCalculator.CalculateCyclomaticComplexity(node)
+						symInfo.NestingDepth = a.metricsCalculator.CalculateNestingDepth(node, 0)
+						symInfo.LinesOfCode = a.metricsCalculator.CalculateLinesOfCode(node)
+					}
+				}
+
+				// Add purity info from side effects analysis
+				if sideEffects != nil {
+					if sideEffect, ok := sideEffects[sym.Name]; ok && sideEffect != nil {
+						symInfo.IsPure = sideEffect.PurityLevel == types.PurityLevelPure
+						if !symInfo.IsPure {
+							symInfo.SideEffects = a.getSideEffectCategories(sideEffect.Categories)
+						}
+					}
+				}
+			}
+
+			symbols = append(symbols, symInfo)
 		}
 	}
 
 	return symbols, nil
+}
+
+// buildFunctionNodeMap creates a map of function/method AST nodes by their starting line
+func (a *Analyzer) buildFunctionNodeMap(rootNode *tree_sitter.Node) map[int]*tree_sitter.Node {
+	nodeMap := make(map[int]*tree_sitter.Node)
+
+	if rootNode == nil {
+		return nodeMap
+	}
+
+	a.collectFunctionNodes(rootNode, nodeMap)
+	return nodeMap
+}
+
+// collectFunctionNodes recursively finds function/method nodes in the AST
+func (a *Analyzer) collectFunctionNodes(node *tree_sitter.Node, nodeMap map[int]*tree_sitter.Node) {
+	if node == nil {
+		return
+	}
+
+	nodeType := node.Kind()
+
+	// Check if this is a function/method node
+	if a.isFunctionNode(nodeType) {
+		startLine := int(node.StartPosition().Row) + 1 // Convert to 1-based
+		nodeMap[startLine] = node
+	}
+
+	// Recurse into children
+	for i := uint(0); i < node.ChildCount(); i++ {
+		child := node.Child(i)
+		a.collectFunctionNodes(child, nodeMap)
+	}
+}
+
+// isFunctionNode checks if a node type represents a function or method
+func (a *Analyzer) isFunctionNode(nodeType string) bool {
+	functionTypes := map[string]bool{
+		// Go
+		"function_declaration": true,
+		"method_declaration":   true,
+		// JavaScript/TypeScript
+		"function":            true,
+		"arrow_function":      true,
+		"method_definition":   true,
+		"function_expression": true,
+		// Python
+		"function_def":       true,
+		"async_function_def": true,
+		// Rust
+		"function_item": true,
+		// Java/C#
+		"constructor_declaration": true,
+		// C/C++
+		"function_definition": true,
+	}
+	return functionTypes[nodeType]
+}
+
+// getSideEffectCategories converts a bitmask of side effect categories to a string slice
+func (a *Analyzer) getSideEffectCategories(cats types.SideEffectCategory) []string {
+	if cats == types.SideEffectNone {
+		return nil
+	}
+
+	var effects []string
+
+	// Write effects
+	if cats&types.SideEffectParamWrite != 0 {
+		effects = append(effects, "param-write")
+	}
+	if cats&types.SideEffectReceiverWrite != 0 {
+		effects = append(effects, "receiver-write")
+	}
+	if cats&types.SideEffectGlobalWrite != 0 {
+		effects = append(effects, "global-write")
+	}
+	if cats&types.SideEffectClosureWrite != 0 {
+		effects = append(effects, "closure-write")
+	}
+	if cats&types.SideEffectFieldWrite != 0 {
+		effects = append(effects, "field-write")
+	}
+
+	// I/O effects
+	if cats&types.SideEffectIO != 0 {
+		effects = append(effects, "io")
+	}
+	if cats&types.SideEffectDatabase != 0 {
+		effects = append(effects, "database")
+	}
+	if cats&types.SideEffectNetwork != 0 {
+		effects = append(effects, "network")
+	}
+
+	// Control flow effects
+	if cats&types.SideEffectThrow != 0 {
+		effects = append(effects, "throw")
+	}
+	if cats&types.SideEffectChannel != 0 {
+		effects = append(effects, "channel")
+	}
+	if cats&types.SideEffectAsync != 0 {
+		effects = append(effects, "async")
+	}
+
+	// Uncertainty markers
+	if cats&types.SideEffectExternalCall != 0 {
+		effects = append(effects, "external-call")
+	}
+	if cats&types.SideEffectDynamicCall != 0 {
+		effects = append(effects, "dynamic-call")
+	}
+	if cats&types.SideEffectReflection != 0 {
+		effects = append(effects, "reflection")
+	}
+	if cats&types.SideEffectIndirectWrite != 0 {
+		effects = append(effects, "indirect-write")
+	}
+
+	return effects
+}
+
+// hasSignificantSideEffects checks if any side effects are significant enough to flag
+func (a *Analyzer) hasSignificantSideEffects(effects []string) bool {
+	significant := map[string]bool{
+		"io":           true,
+		"network":      true,
+		"database":     true,
+		"global-write": true,
+	}
+	for _, e := range effects {
+		if significant[e] {
+			return true
+		}
+	}
+	return false
 }
 
 // isSupportedFile checks if a file is supported for parsing
@@ -774,8 +949,161 @@ func (a *Analyzer) checkAbbreviations(newSym SymbolInfo, existing []SymbolInfo) 
 	return nil
 }
 
+// checkFunctionMetrics analyzes function metrics and returns findings for any that exceed thresholds
+func (a *Analyzer) checkFunctionMetrics(ctx context.Context, newSymbols, existingSymbols []SymbolInfo, params AnalysisParams) []MetricsFinding {
+	var findings []MetricsFinding
+
+	thresholds := DefaultMetricsThresholds()
+
+	// Build map of existing symbols by name+file for comparison
+	existingByKey := make(map[string]SymbolInfo)
+	for _, sym := range existingSymbols {
+		if sym.Type == "function" || sym.Type == "method" {
+			key := sym.Name + ":" + sym.FilePath
+			existingByKey[key] = sym
+		}
+	}
+
+	for _, sym := range newSymbols {
+		// Only analyze functions and methods
+		if sym.Type != "function" && sym.Type != "method" {
+			continue
+		}
+
+		// Skip if no metrics were computed
+		if sym.Complexity == 0 && sym.LinesOfCode == 0 && sym.NestingDepth == 0 {
+			continue
+		}
+
+		newMetrics := &SymbolMetrics{
+			Complexity:   sym.Complexity,
+			LinesOfCode:  sym.LinesOfCode,
+			NestingDepth: sym.NestingDepth,
+			IsPure:       sym.IsPure,
+			SideEffects:  sym.SideEffects,
+		}
+
+		// Check for high complexity
+		if sym.Complexity > thresholds.HighComplexity {
+			severity := DetermineMetricsSeverity(MetricsIssueHighComplexity, *newMetrics, thresholds)
+			findings = append(findings, MetricsFinding{
+				Severity:    severity,
+				Description: fmt.Sprintf("Function '%s' has high cyclomatic complexity (%d)", sym.Name, sym.Complexity),
+				Symbol:      sym,
+				IssueType:   MetricsIssueHighComplexity,
+				Issue:       fmt.Sprintf("Cyclomatic complexity of %d exceeds threshold of %d", sym.Complexity, thresholds.HighComplexity),
+				Suggestion:  "Consider breaking this function into smaller, more focused functions",
+				NewMetrics:  newMetrics,
+			})
+		}
+
+		// Check for long function
+		if sym.LinesOfCode > thresholds.LongFunction {
+			severity := DetermineMetricsSeverity(MetricsIssueLongFunction, *newMetrics, thresholds)
+			findings = append(findings, MetricsFinding{
+				Severity:    severity,
+				Description: fmt.Sprintf("Function '%s' is too long (%d lines)", sym.Name, sym.LinesOfCode),
+				Symbol:      sym,
+				IssueType:   MetricsIssueLongFunction,
+				Issue:       fmt.Sprintf("Function has %d lines, exceeding threshold of %d", sym.LinesOfCode, thresholds.LongFunction),
+				Suggestion:  "Extract parts of this function into smaller helper functions",
+				NewMetrics:  newMetrics,
+			})
+		}
+
+		// Check for deep nesting
+		if sym.NestingDepth > thresholds.DeepNesting {
+			severity := DetermineMetricsSeverity(MetricsIssueDeepNesting, *newMetrics, thresholds)
+			findings = append(findings, MetricsFinding{
+				Severity:    severity,
+				Description: fmt.Sprintf("Function '%s' has deep nesting (%d levels)", sym.Name, sym.NestingDepth),
+				Symbol:      sym,
+				IssueType:   MetricsIssueDeepNesting,
+				Issue:       fmt.Sprintf("Nesting depth of %d exceeds threshold of %d", sym.NestingDepth, thresholds.DeepNesting),
+				Suggestion:  "Reduce nesting by using early returns, extracting functions, or simplifying conditions",
+				NewMetrics:  newMetrics,
+			})
+		}
+
+		// Check for complexity growth in modified functions
+		key := sym.Name + ":" + sym.FilePath
+		if existing, ok := existingByKey[key]; ok {
+			oldMetrics := &SymbolMetrics{
+				Complexity:   existing.Complexity,
+				LinesOfCode:  existing.LinesOfCode,
+				NestingDepth: existing.NestingDepth,
+				IsPure:       existing.IsPure,
+				SideEffects:  existing.SideEffects,
+			}
+
+			// Check for complexity growth
+			if existing.Complexity > 0 && sym.Complexity > existing.Complexity {
+				growth := float64(sym.Complexity-existing.Complexity) / float64(existing.Complexity) * 100
+				if int(growth) >= thresholds.ComplexityGrowthThreshold {
+					findings = append(findings, MetricsFinding{
+						Severity:    SeverityWarning,
+						Description: fmt.Sprintf("Function '%s' complexity increased from %d to %d (+%.0f%%)", sym.Name, existing.Complexity, sym.Complexity, growth),
+						Symbol:      sym,
+						IssueType:   MetricsIssueComplexityGrew,
+						Issue:       fmt.Sprintf("Complexity grew by %.0f%% (from %d to %d)", growth, existing.Complexity, sym.Complexity),
+						Suggestion:  "Consider refactoring to maintain or reduce complexity",
+						OldMetrics:  oldMetrics,
+						NewMetrics:  newMetrics,
+					})
+				}
+			}
+
+			// Check for purity loss (previously pure function became impure)
+			if existing.IsPure && !sym.IsPure {
+				effectsStr := strings.Join(sym.SideEffects, ", ")
+				findings = append(findings, MetricsFinding{
+					Severity:    SeverityWarning,
+					Description: fmt.Sprintf("Function '%s' lost purity: [%s]", sym.Name, effectsStr),
+					Symbol:      sym,
+					IssueType:   MetricsIssuePurityLost,
+					Issue:       fmt.Sprintf("Previously pure function now has side effects: [%s]", effectsStr),
+					Suggestion:  "Consider keeping pure functions pure or extracting the impure operations",
+					OldMetrics:  oldMetrics,
+					NewMetrics:  newMetrics,
+				})
+			}
+		} else {
+			// New function - check if it has significant side effects worth noting
+			// Flag when function has I/O, network, database, or global writes
+			if len(sym.SideEffects) > 0 && a.hasSignificantSideEffects(sym.SideEffects) {
+				effectsStr := strings.Join(sym.SideEffects, ", ")
+				findings = append(findings, MetricsFinding{
+					Severity:    SeverityInfo,
+					Description: fmt.Sprintf("New function '%s' has side effects: [%s]", sym.Name, effectsStr),
+					Symbol:      sym,
+					IssueType:   MetricsIssueImpureFunction,
+					Issue:       fmt.Sprintf("Function has side effects: [%s]", effectsStr),
+					Suggestion:  "Consider if side effects are intentional and well-documented",
+					NewMetrics:  newMetrics,
+				})
+			}
+		}
+	}
+
+	// Sort by severity
+	sort.Slice(findings, func(i, j int) bool {
+		return severityRank(findings[i].Severity) > severityRank(findings[j].Severity)
+	})
+
+	// Limit findings
+	maxFindings := params.MaxFindings
+	if maxFindings == 0 {
+		maxFindings = 20
+	}
+	if len(findings) > maxFindings {
+		findings = findings[:maxFindings]
+	}
+
+	return findings
+}
+
 // buildReport constructs the final analysis report
-func (a *Analyzer) buildReport(files []ChangedFile, symbols []SymbolInfo, duplicates []DuplicateFinding, namingIssues []NamingFinding, params AnalysisParams, startTime time.Time) *AnalysisReport {
+func (a *Analyzer) buildReport(files []ChangedFile, symbols []SymbolInfo, duplicates []DuplicateFinding, namingIssues []NamingFinding, metricsIssues []MetricsFinding, params AnalysisParams, startTime time.Time) *AnalysisReport {
 	// Count symbols by change type
 	symbolsAdded := 0
 	for _, file := range files {
@@ -789,27 +1117,29 @@ func (a *Analyzer) buildReport(files []ChangedFile, symbols []SymbolInfo, duplic
 	}
 	symbolsModified := len(symbols) - symbolsAdded
 
-	// Calculate risk score
-	riskScore := CalculateRiskScore(duplicates, namingIssues)
+	// Calculate risk score (includes all finding types)
+	riskScore := CalculateRiskScore(duplicates, namingIssues, metricsIssues)
 
 	// Generate top recommendation
-	topRec := GenerateTopRecommendation(duplicates, namingIssues)
+	topRec := GenerateTopRecommendation(duplicates, namingIssues, metricsIssues)
 
 	baseRef, _ := a.provider.GetBaseRef(context.Background(), params)
 	targetRef := a.provider.GetTargetRef(params)
 
 	return &AnalysisReport{
 		Summary: ReportSummary{
-			FilesChanged:      len(files),
-			SymbolsAdded:      symbolsAdded,
-			SymbolsModified:   symbolsModified,
-			DuplicatesFound:   len(duplicates),
-			NamingIssuesFound: len(namingIssues),
-			RiskScore:         riskScore,
-			TopRecommendation: topRec,
+			FilesChanged:       len(files),
+			SymbolsAdded:       symbolsAdded,
+			SymbolsModified:    symbolsModified,
+			DuplicatesFound:    len(duplicates),
+			NamingIssuesFound:  len(namingIssues),
+			MetricsIssuesFound: len(metricsIssues),
+			RiskScore:          riskScore,
+			TopRecommendation:  topRec,
 		},
-		Duplicates:   duplicates,
-		NamingIssues: namingIssues,
+		Duplicates:    duplicates,
+		NamingIssues:  namingIssues,
+		MetricsIssues: metricsIssues,
 		Metadata: ReportMetadata{
 			BaseRef:        baseRef,
 			TargetRef:      targetRef,

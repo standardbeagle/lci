@@ -170,6 +170,36 @@ func (rt *ReferenceTracker) GetReferenceStats() ReferenceStats {
 	return rt.stats
 }
 
+// HasRelationships returns true if the reference tracker has any call graph data
+// This is used to detect if the index is in "lightweight" mode without relationships
+func (rt *ReferenceTracker) HasRelationships() bool {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
+	// Check if we have any incoming or outgoing references tracked
+	if len(rt.incomingRefs) > 0 || len(rt.outgoingRefs) > 0 {
+		return true
+	}
+
+	// Also check pre-computed stats
+	return rt.stats.TotalReferences > 0
+}
+
+// GetRelationshipStats returns detailed stats about call graph population
+// Used for diagnostics when relationship queries return empty
+func (rt *ReferenceTracker) GetRelationshipStats() map[string]int {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
+	return map[string]int{
+		"total_symbols":      len(rt.symbolsByName),
+		"total_references":   len(rt.references),
+		"symbols_with_incoming_refs": len(rt.incomingRefs),
+		"symbols_with_outgoing_refs": len(rt.outgoingRefs),
+		"files_indexed":      len(rt.symbolsByFile),
+	}
+}
+
 // SetDeletedFileTracker sets the deleted file tracker for filtering stale symbols
 // This must be called after construction to avoid circular dependencies
 func (rt *ReferenceTracker) SetDeletedFileTracker(tracker interface {

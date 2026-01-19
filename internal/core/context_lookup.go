@@ -10,6 +10,65 @@ import (
 	"github.com/standardbeagle/lci/internal/types"
 )
 
+// LookupError represents a specific failure during context lookup
+type LookupError struct {
+	Code    string // Machine-readable error code
+	Message string // Human-readable description
+	Field   string // Which field/section failed
+	Fatal   bool   // If true, entire lookup should fail
+}
+
+func (e *LookupError) Error() string {
+	return fmt.Sprintf("[%s] %s (field: %s)", e.Code, e.Message, e.Field)
+}
+
+// Standard lookup error codes
+var (
+	ErrSymbolNotFound      = &LookupError{Code: "SYMBOL_NOT_FOUND", Message: "symbol not found in index", Field: "object_id", Fatal: true}
+	ErrSymbolNotInFile     = &LookupError{Code: "SYMBOL_NOT_IN_FILE", Message: "symbol exists but not in specified file", Field: "object_id", Fatal: true}
+	ErrRefTrackerNil       = &LookupError{Code: "REF_TRACKER_NIL", Message: "reference tracker not initialized - call graph unavailable", Field: "relationships", Fatal: false}
+	ErrCallGraphEmpty      = &LookupError{Code: "CALL_GRAPH_EMPTY", Message: "call graph index is empty - relationships not indexed", Field: "relationships", Fatal: false}
+	ErrNotAFunction        = &LookupError{Code: "NOT_A_FUNCTION", Message: "caller/callee queries only apply to functions and methods", Field: "caller_functions", Fatal: false}
+	ErrSymbolIndexNil      = &LookupError{Code: "SYMBOL_INDEX_NIL", Message: "symbol index not initialized", Field: "basic_info", Fatal: true}
+	ErrFileServiceNil      = &LookupError{Code: "FILE_SERVICE_NIL", Message: "file service not initialized", Field: "structure", Fatal: false}
+)
+
+// LookupDiagnostics tracks all issues encountered during context lookup
+type LookupDiagnostics struct {
+	Errors   []LookupError `json:"errors,omitempty"`   // Non-fatal errors encountered
+	Warnings []string      `json:"warnings,omitempty"` // Warnings about partial data
+	// Index health indicators
+	SymbolIndexReady    bool `json:"symbol_index_ready"`
+	RefTrackerReady     bool `json:"ref_tracker_ready"`
+	CallGraphPopulated  bool `json:"call_graph_populated"`
+	SideEffectsReady    bool `json:"side_effects_ready"`
+	// Counts for verification
+	RelationshipsFound int `json:"relationships_found"`
+	SymbolsSearched    int `json:"symbols_searched"`
+}
+
+// HasFatalError returns true if any fatal error occurred
+func (d *LookupDiagnostics) HasFatalError() bool {
+	for _, e := range d.Errors {
+		if e.Fatal {
+			return true
+		}
+	}
+	return false
+}
+
+// AddError adds a lookup error to diagnostics
+func (d *LookupDiagnostics) AddError(err *LookupError) {
+	if err != nil {
+		d.Errors = append(d.Errors, *err)
+	}
+}
+
+// AddWarning adds a warning message
+func (d *LookupDiagnostics) AddWarning(msg string) {
+	d.Warnings = append(d.Warnings, msg)
+}
+
 // CodeObjectID uniquely identifies a code object (function, class, type, etc.)
 type CodeObjectID struct {
 	FileID   types.FileID     `json:"file_id"`
@@ -47,6 +106,9 @@ type CodeObjectContext struct {
 	// Metadata
 	GeneratedAt    time.Time `json:"generated_at"`
 	ContextVersion string    `json:"context_version"`
+
+	// Diagnostics - reports any issues encountered during lookup
+	Diagnostics *LookupDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // DirectRelationships contains immediate relationships of the code object
@@ -265,20 +327,39 @@ func NewContextLookupEngine(
 }
 
 // GetContext returns comprehensive context for a code object
+// Errors are reported in Diagnostics field; only fatal errors return error
 func (cle *ContextLookupEngine) GetContext(objectID CodeObjectID) (*CodeObjectContext, error) {
+	// Initialize diagnostics to track all issues
+	diag := &LookupDiagnostics{}
+
 	// Validate engine
 	if cle == nil {
 		return nil, errors.New("context lookup engine is nil")
 	}
 
-	// Validate required components
+	// Check and report component availability
+	diag.SymbolIndexReady = cle.symbolIndex != nil
+	diag.RefTrackerReady = cle.refTracker != nil
+
+	// Validate required components - these are fatal
 	if cle.symbolIndex == nil {
-		return nil, errors.New("symbol index not initialized")
+		diag.AddError(ErrSymbolIndexNil)
+		return nil, fmt.Errorf("%w: symbol index not initialized", ErrSymbolIndexNil)
 	}
-	// AST store removed - using metadata index instead
 	if cle.refTracker == nil {
-		return nil, errors.New("reference tracker not initialized")
+		diag.AddError(ErrRefTrackerNil)
+		return nil, fmt.Errorf("%w: reference tracker not initialized", ErrRefTrackerNil)
 	}
+
+	// Check if call graph has data
+	diag.CallGraphPopulated = cle.refTracker.HasRelationships()
+	if !diag.CallGraphPopulated {
+		diag.AddError(ErrCallGraphEmpty)
+		diag.AddWarning("Call graph is empty - relationship queries will return no data. Ensure full indexing is complete.")
+	}
+
+	// Check side effects availability
+	diag.SideEffectsReady = cle.graphPropagator != nil
 
 	// Validate object ID
 	if !objectID.IsValid() {
@@ -288,43 +369,52 @@ func (cle *ContextLookupEngine) GetContext(objectID CodeObjectID) (*CodeObjectCo
 	context := &CodeObjectContext{
 		ObjectID:       objectID,
 		GeneratedAt:    time.Now(),
-		ContextVersion: "1.0.0",
+		ContextVersion: "1.1.0", // Updated version with diagnostics
+		Diagnostics:    diag,
 	}
 
-	// Fill in basic information
+	// Fill in basic information - fatal on failure
 	if err := cle.fillBasicInfo(context); err != nil {
+		diag.AddError(&LookupError{Code: "BASIC_INFO_FAILED", Message: err.Error(), Field: "basic_info", Fatal: true})
 		return nil, fmt.Errorf("failed to get basic info: %w", err)
 	}
 
-	// Fill direct relationships
+	// Fill direct relationships - continue on failure, report in diagnostics
 	if err := cle.fillDirectRelationships(context); err != nil {
-		return nil, fmt.Errorf("failed to get direct relationships: %w", err)
+		diag.AddError(&LookupError{Code: "RELATIONSHIPS_FAILED", Message: err.Error(), Field: "direct_relationships", Fatal: false})
+		diag.AddWarning(fmt.Sprintf("Relationship lookup failed: %v", err))
 	}
 
-	// Fill variable context
+	// Count relationships found for diagnostics
+	diag.RelationshipsFound = len(context.DirectRelationships.CallerFunctions) +
+		len(context.DirectRelationships.CalledFunctions) +
+		len(context.DirectRelationships.IncomingReferences) +
+		len(context.DirectRelationships.OutgoingReferences)
+
+	// Fill variable context - continue on failure
 	if err := cle.fillVariableContext(context); err != nil {
-		return nil, fmt.Errorf("failed to get variable context: %w", err)
+		diag.AddError(&LookupError{Code: "VARIABLES_FAILED", Message: err.Error(), Field: "variable_context", Fatal: false})
 	}
 
-	// Fill semantic context
+	// Fill semantic context - continue on failure
 	if err := cle.fillSemanticContext(context); err != nil {
-		return nil, fmt.Errorf("failed to get semantic context: %w", err)
+		diag.AddError(&LookupError{Code: "SEMANTIC_FAILED", Message: err.Error(), Field: "semantic_context", Fatal: false})
 	}
 
-	// Fill structure context
+	// Fill structure context - continue on failure
 	if err := cle.fillStructureContext(context); err != nil {
-		return nil, fmt.Errorf("failed to get structure context: %w", err)
+		diag.AddError(&LookupError{Code: "STRUCTURE_FAILED", Message: err.Error(), Field: "structure_context", Fatal: false})
 	}
 
-	// Fill usage analysis
+	// Fill usage analysis - continue on failure
 	if err := cle.fillUsageAnalysis(context); err != nil {
-		return nil, fmt.Errorf("failed to get usage analysis: %w", err)
+		diag.AddError(&LookupError{Code: "USAGE_FAILED", Message: err.Error(), Field: "usage_analysis", Fatal: false})
 	}
 
-	// Fill AI context if enabled
+	// Fill AI context if enabled - continue on failure
 	if atomic.LoadInt32(&cle.includeAIText) != 0 {
 		if err := cle.fillAIContext(context); err != nil {
-			return nil, fmt.Errorf("failed to get AI context: %w", err)
+			diag.AddError(&LookupError{Code: "AI_CONTEXT_FAILED", Message: err.Error(), Field: "ai_context", Fatal: false})
 		}
 	}
 

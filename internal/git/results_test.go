@@ -103,7 +103,7 @@ func TestCalculateRiskScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := CalculateRiskScore(tt.duplicates, tt.namingIssues)
+			result := CalculateRiskScore(tt.duplicates, tt.namingIssues, nil)
 			if result < tt.minExpected || result > tt.maxExpected {
 				t.Errorf("CalculateRiskScore() = %v, want between %v and %v",
 					result, tt.minExpected, tt.maxExpected)
@@ -168,7 +168,7 @@ func TestGenerateTopRecommendation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := GenerateTopRecommendation(tt.duplicates, tt.namingIssues)
+			result := GenerateTopRecommendation(tt.duplicates, tt.namingIssues, nil)
 			if result != tt.expected {
 				t.Errorf("GenerateTopRecommendation() = %v, want %v", result, tt.expected)
 			}

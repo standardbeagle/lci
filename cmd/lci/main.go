@@ -21,6 +21,7 @@ import (
 	"github.com/standardbeagle/lci/internal/git"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/mcp"
+	"github.com/standardbeagle/lci/internal/server"
 	"github.com/standardbeagle/lci/internal/types"
 	"github.com/standardbeagle/lci/internal/version"
 
@@ -1731,65 +1732,63 @@ func gitAnalyzeCommand(c *cli.Context) error {
 	jsonOutput := c.Bool("json")
 
 	// Validate scope
-	var analysisScope git.AnalysisScope
 	switch scope {
-	case "staged":
-		analysisScope = git.ScopeStaged
-	case "wip":
-		analysisScope = git.ScopeWIP
-	case "commit":
-		analysisScope = git.ScopeCommit
-	case "range":
-		analysisScope = git.ScopeRange
+	case "staged", "wip", "commit", "range":
+		// Valid scopes
 	default:
 		return fmt.Errorf("invalid scope: %s (must be staged, wip, commit, or range)", scope)
 	}
 
 	// Check for required args
-	if analysisScope == git.ScopeRange && baseRef == "" {
+	if scope == "range" && baseRef == "" {
 		return errors.New("--base is required for range scope")
 	}
 
-	// Build analysis params
-	params := git.DefaultAnalysisParams()
-	params.Scope = analysisScope
-	if baseRef != "" {
-		params.BaseRef = baseRef
-	}
-	if targetRef != "" {
-		params.TargetRef = targetRef
-	}
-	if len(focus) > 0 {
-		params.Focus = focus
-	}
-	if threshold > 0 {
-		params.SimilarityThreshold = threshold
-	}
-	if maxFindings > 0 {
-		params.MaxFindings = maxFindings
-	}
-
-	// Create git provider
-	gitProvider, err := git.NewProvider(projectRoot)
+	// Load configuration
+	cfg, err := loadConfigWithOverrides(c)
 	if err != nil {
-		return fmt.Errorf("failed to create git provider: %w", err)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Create analyzer with indexer
-	analyzer := git.NewAnalyzer(gitProvider, indexer)
+	// Ensure server is running (auto-start if needed)
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
 
-	// Run analysis
-	ctx := context.Background()
-	report, err := analyzer.Analyze(ctx, params)
+	// Build request
+	req := server.GitAnalyzeRequest{
+		Scope:               scope,
+		BaseRef:             baseRef,
+		TargetRef:           targetRef,
+		Focus:               focus,
+		SimilarityThreshold: threshold,
+		MaxFindings:         maxFindings,
+	}
+
+	// Run analysis via server
+	reportData, err := client.GitAnalyze(req)
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
+	// Convert to AnalysisReport for output
+	// The server returns the report as interface{}, we need to convert it
+	reportJSON, err := json.Marshal(reportData)
+	if err != nil {
+		return fmt.Errorf("failed to process report: %w", err)
+	}
+
+	var report git.AnalysisReport
+	if err := json.Unmarshal(reportJSON, &report); err != nil {
+		return fmt.Errorf("failed to parse report: %w", err)
+	}
+
 	// Output results
 	if jsonOutput {
-		return outputGitAnalyzeJSON(report)
+		return outputGitAnalyzeJSON(&report)
 	}
-	return outputGitAnalyzeText(report)
+	return outputGitAnalyzeText(&report)
 }
 
 // outputGitAnalyzeJSON outputs the analysis report as JSON

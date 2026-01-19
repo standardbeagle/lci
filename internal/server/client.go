@@ -421,3 +421,33 @@ func (c *Client) WaitForReady(timeout time.Duration) error {
 		}
 	}
 }
+
+// GitAnalyze performs git change analysis
+func (c *Client) GitAnalyze(req GitAnalyzeRequest) (interface{}, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/git-analyze", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to analyze git changes: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var gitResp GitAnalyzeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&gitResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if gitResp.Error != "" {
+		return nil, fmt.Errorf("git analyze error: %s", gitResp.Error)
+	}
+
+	return gitResp.Report, nil
+}

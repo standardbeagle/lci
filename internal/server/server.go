@@ -14,6 +14,7 @@ import (
 
 	"github.com/standardbeagle/lci/internal/config"
 	"github.com/standardbeagle/lci/internal/debug"
+	"github.com/standardbeagle/lci/internal/git"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/search"
 	"github.com/standardbeagle/lci/internal/types"
@@ -199,6 +200,7 @@ func (s *IndexServer) registerHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/definition", s.handleDefinition)
 	mux.HandleFunc("/references", s.handleReferences)
 	mux.HandleFunc("/tree", s.handleTree)
+	mux.HandleFunc("/git-analyze", s.handleGitAnalyze)
 }
 
 // handleStatus returns the current index status
@@ -643,4 +645,84 @@ func (s *IndexServer) GetMemoryStats() runtime.MemStats {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return m
+}
+
+// handleGitAnalyze performs git change analysis
+func (s *IndexServer) handleGitAnalyze(w http.ResponseWriter, r *http.Request) {
+	var req GitAnalyzeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Convert scope string to AnalysisScope
+	var scope git.AnalysisScope
+	switch req.Scope {
+	case "staged":
+		scope = git.ScopeStaged
+	case "wip":
+		scope = git.ScopeWIP
+	case "commit":
+		scope = git.ScopeCommit
+	case "range":
+		scope = git.ScopeRange
+	default:
+		response := GitAnalyzeResponse{Error: fmt.Sprintf("invalid scope: %s", req.Scope)}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Create git provider
+	gitProvider, err := git.NewProvider(s.cfg.Project.Root)
+	if err != nil {
+		response := GitAnalyzeResponse{Error: fmt.Sprintf("failed to create git provider: %v", err)}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Create analyzer
+	analyzer := git.NewAnalyzer(gitProvider, s.indexer)
+
+	// Build params
+	params := git.DefaultAnalysisParams()
+	params.Scope = scope
+	if req.BaseRef != "" {
+		params.BaseRef = req.BaseRef
+	}
+	if req.TargetRef != "" {
+		params.TargetRef = req.TargetRef
+	}
+	if len(req.Focus) > 0 {
+		params.Focus = req.Focus
+	}
+	if req.SimilarityThreshold > 0 {
+		params.SimilarityThreshold = req.SimilarityThreshold
+	}
+	if req.MaxFindings > 0 {
+		params.MaxFindings = req.MaxFindings
+	}
+
+	// Run analysis
+	report, err := analyzer.Analyze(context.Background(), params)
+	if err != nil {
+		response := GitAnalyzeResponse{Error: fmt.Sprintf("analysis failed: %v", err)}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	response := GitAnalyzeResponse{Report: report}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
