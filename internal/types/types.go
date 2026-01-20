@@ -1379,6 +1379,9 @@ type SearchOptions struct {
 	Verbose bool // Show verbose output
 	// Context search option
 	IncludeObjectIDs bool // Include compact object IDs for context search (default: true)
+
+	// AI-focused features for RepoBench evaluation
+	ContextFilter string // Filter results by context pattern (e.g., "cache", "test")
 }
 
 // SearchStats represents statistical information about search results

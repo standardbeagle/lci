@@ -228,6 +228,20 @@ func main() {
 						Name:  "no-ids",
 						Usage: "Exclude object IDs from results",
 					},
+					// New AI-focused features
+					&cli.BoolFlag{
+						Name:  "compact-search",
+						Aliases: []string{"cs"},
+						Usage: "Show compact output (patterns only, no full context)",
+					},
+					&cli.StringFlag{
+						Name:  "rank-by",
+						Usage: "Rank results by: relevance, proximity, similarity (default: none)",
+					},
+					&cli.StringFlag{
+						Name:  "context-filter",
+						Usage: "Filter results by context pattern (e.g., 'cache', 'test')",
+					},
 				},
 				Action: searchCommand,
 			},

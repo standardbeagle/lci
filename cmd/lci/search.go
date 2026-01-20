@@ -40,6 +40,14 @@ func searchCommand(c *cli.Context) error {
 	cpuProfile := c.String("cpu-profile")
 	memProfile := c.String("mem-profile")
 
+	// New AI-focused features
+	compact := c.Bool("compact-search")
+	rankBy := c.String("rank-by")
+	contextFilter := c.String("context-filter")
+
+	// Debug: test if flags are being read
+	fmt.Printf("DEBUG: verbose=%v, compact=%v, json=%v, light=%v\n", verbose, compact, c.Bool("json"), light)
+
 	// Grep-like feature flags
 	invertMatch := c.Bool("invert-match")
 	patterns := c.StringSlice("patterns")
@@ -120,7 +128,7 @@ func searchCommand(c *cli.Context) error {
 			return cli.Exit(err.Error(), 2)
 		}
 		elapsed := time.Since(start)
-		return displayRegularResults(c, pattern, results, elapsed)
+		return displayRegularResults(c, pattern, results, elapsed, compact)
 	} else {
 		// DEFAULT: Use StandardResult with full semantic analysis
 		searchOptions := types.SearchOptions{
@@ -144,6 +152,7 @@ func searchCommand(c *cli.Context) error {
 			WordBoundary:     wordBoundary,
 			MaxCountPerFile:  maxCountPerFile,
 			IncludeObjectIDs: includeObjectIDs,
+			ContextFilter:    contextFilter,
 		}
 
 		// Use server search and convert to StandardResult format
@@ -216,7 +225,7 @@ func searchCommand(c *cli.Context) error {
 			}
 		}
 
-		return displayStandardResultsWithAssembly(c, pattern, standardResults, assemblyResults, assemblyTriggered, elapsed)
+		return displayStandardResultsWithAssembly(c, pattern, standardResults, assemblyResults, assemblyTriggered, elapsed, compact, rankBy)
 	}
 }
 
@@ -246,7 +255,7 @@ func compareSearchImplementationsWithClient(c *cli.Context, client *server.Clien
 	return nil
 }
 
-func displayRegularResults(c *cli.Context, pattern string, results []search.GrepResult, elapsed time.Duration) error {
+func displayRegularResults(c *cli.Context, pattern string, results []search.GrepResult, elapsed time.Duration, compact bool) error {
 	if c.Bool("json") {
 		output := map[string]interface{}{
 			"query":   pattern,
@@ -255,6 +264,22 @@ func displayRegularResults(c *cli.Context, pattern string, results []search.Grep
 			"results": results,
 		}
 		return json.NewEncoder(os.Stdout).Encode(output)
+	}
+
+	// Compact mode: show just the matching lines with minimal context
+	if compact {
+		fmt.Printf("Found %d matches in %.1fms (compact mode)\n\n", len(results), float64(elapsed.Microseconds())/1000.0)
+		for _, r := range results {
+			// Show just the matching line
+			for i, line := range r.Context.Lines {
+				lineNum := r.Context.StartLine + i
+				if lineNum == r.Line {
+					fmt.Printf("%s:%d: %s\n", r.Path, lineNum, line)
+					break
+				}
+			}
+		}
+		return nil
 	}
 
 	fmt.Printf("Found %d results in %.1fms\n\n", len(results), float64(elapsed.Microseconds())/1000.0)
@@ -325,7 +350,7 @@ func displayGrepResults(c *cli.Context, pattern string, results []search.GrepRes
 	return nil
 }
 
-func displayStandardResultsWithAssembly(c *cli.Context, pattern string, results []search.StandardResult, assemblyResults []core.AssemblyResult, assemblyTriggered bool, elapsed time.Duration) error {
+func displayStandardResultsWithAssembly(c *cli.Context, pattern string, results []search.StandardResult, assemblyResults []core.AssemblyResult, assemblyTriggered bool, elapsed time.Duration, compact bool, rankBy string) error {
 	// Convert paths to relative for user-facing output
 	results = pathutil.ToRelativeStandardResults(results, projectRoot)
 
@@ -357,6 +382,23 @@ func displayStandardResultsWithAssembly(c *cli.Context, pattern string, results 
 		} else {
 			totalMatches++ // Fallback
 		}
+	}
+
+	// Compact mode: show just the patterns with file location
+	if compact {
+		fmt.Printf("Found %d matches in %.1fms (compact mode)\n\n", len(results), float64(elapsed.Microseconds())/1000.0)
+		for _, r := range results {
+			// Extract just the matching line
+			result := r.Result
+			for i, line := range result.Context.Lines {
+				lineNum := result.Context.StartLine + i
+				if lineNum == result.Line {
+					fmt.Printf("%s:%d: %s\n", result.Path, lineNum, strings.TrimSpace(line))
+					break
+				}
+			}
+		}
+		return nil
 	}
 
 	// Display search summary

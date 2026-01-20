@@ -1,0 +1,17 @@
+{
+  "verifications": 6,
+  "last_verification_at": "2026-01-20T10:37:24.383745",
+  "doc_updates": 6,
+  "last_doc_update_at": "2026-01-20T10:37:24.388290",
+  "iterations": 6,
+  "last_iteration_at": "2026-01-20T10:37:24.380462",
+  "last_subagent": "unknown",
+  "last_result": {
+    "status": "unknown",
+    "task_id": null,
+    "failed_phase": null,
+    "blocker": null,
+    "uncertainty": null,
+    "fix_task_created": false
+  }
+}

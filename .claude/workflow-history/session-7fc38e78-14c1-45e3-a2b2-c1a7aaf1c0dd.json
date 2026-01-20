@@ -1,0 +1,12 @@
+{
+  "session_id": "7fc38e78-14c1-45e3-a2b2-c1a7aaf1c0dd",
+  "started_at": "2026-01-19T14:49:23-06:00",
+  "workflow_version": "0.1.0",
+  "subagent_spawns": 0,
+  "subagent_completions": 0,
+  "context_barriers_enforced": 0,
+  "loops_started": 0,
+  "tasks_completed": 0,
+  "tasks_failed": 0,
+  "ended_at": "2026-01-19T15:00:55-06:00"
+}
