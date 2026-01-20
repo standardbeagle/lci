@@ -264,6 +264,140 @@ func (c *Client) Reindex(path string) error {
 	return nil
 }
 
+// GetDefinition searches for symbol definitions by name pattern
+func (c *Client) GetDefinition(pattern string, maxResults int) ([]DefinitionLocation, error) {
+	req := DefinitionRequest{
+		Pattern:    pattern,
+		MaxResults: maxResults,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/definition", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get definition: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var defResp DefinitionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&defResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if defResp.Error != "" {
+		return nil, fmt.Errorf("definition error: %s", defResp.Error)
+	}
+
+	return defResp.Definitions, nil
+}
+
+// GetReferences searches for symbol references (usages) by name pattern
+func (c *Client) GetReferences(pattern string, maxResults int) ([]ReferenceLocation, error) {
+	req := ReferencesRequest{
+		Pattern:    pattern,
+		MaxResults: maxResults,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/references", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get references: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var refResp ReferencesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&refResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if refResp.Error != "" {
+		return nil, fmt.Errorf("references error: %s", refResp.Error)
+	}
+
+	return refResp.References, nil
+}
+
+// GetTree generates a function call hierarchy tree
+func (c *Client) GetTree(functionName string, maxDepth int, showLines, compact, agentMode bool, exclude string) (*types.FunctionTree, error) {
+	req := TreeRequest{
+		FunctionName: functionName,
+		MaxDepth:     maxDepth,
+		ShowLines:    showLines,
+		Compact:      compact,
+		AgentMode:    agentMode,
+		Exclude:      exclude,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/tree", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var treeResp TreeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&treeResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if treeResp.Error != "" {
+		return nil, fmt.Errorf("tree error: %s", treeResp.Error)
+	}
+
+	return treeResp.Tree, nil
+}
+
+// GetStats retrieves index statistics from the server
+func (c *Client) GetStats() (*StatsResponse, error) {
+	resp, err := c.httpClient.Post("http://unix/stats", "application/json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stats: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var statsResp StatsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&statsResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if statsResp.Error != "" {
+		return nil, fmt.Errorf("stats error: %s", statsResp.Error)
+	}
+
+	return &statsResp, nil
+}
+
 // WaitForReady waits until the index is ready or timeout
 func (c *Client) WaitForReady(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

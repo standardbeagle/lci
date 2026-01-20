@@ -16,13 +16,11 @@ import (
 	"time"
 
 	"github.com/standardbeagle/lci/internal/config"
-	"github.com/standardbeagle/lci/internal/core"
 	"github.com/standardbeagle/lci/internal/debug"
 	"github.com/standardbeagle/lci/internal/display"
 	"github.com/standardbeagle/lci/internal/git"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/mcp"
-	"github.com/standardbeagle/lci/internal/search"
 	"github.com/standardbeagle/lci/internal/types"
 	"github.com/standardbeagle/lci/internal/version"
 
@@ -30,11 +28,10 @@ import (
 )
 
 var (
-	Version           = version.Version // Use centralized version management
-	indexer           *indexing.MasterIndex
-	searchCoordinator *search.SearchCoordinator
-	cleanupFuncs      []func()
-	projectRoot       string // Stores the absolute path to the project root for path conversion
+	Version      = version.Version // Use centralized version management
+	indexer      *indexing.MasterIndex
+	cleanupFuncs []func()
+	projectRoot  string // Stores the absolute path to the project root for path conversion
 )
 
 // loadConfigWithOverrides loads configuration and applies CLI flag overrides
@@ -732,20 +729,10 @@ This will free all memory and close the socket.`,
 				indexer = indexing.NewMasterIndex(cfg)
 				projectRoot = cfg.Project.Root // Set project root for path conversion
 
-				// Initialize search coordinator for concurrent operations
-				indexCoordinator := core.NewIndexCoordinator()
-				searchCoordinator = search.NewSearchCoordinator(indexCoordinator)
-
-				// Register cleanup for indexer and coordinator
+				// Register cleanup for indexer
 				cleanupFuncs = append(cleanupFuncs, func() {
 					if indexer != nil {
 						indexer.Close()
-					}
-					if indexCoordinator != nil {
-						// IndexCoordinator is an interface, need type assertion for Close()
-						if closer, ok := indexCoordinator.(interface{ Close() error }); ok {
-							closer.Close()
-						}
 					}
 				})
 
@@ -773,43 +760,9 @@ This will free all memory and close the socket.`,
 					// Test run mode - show files that would be indexed without processing
 					debug.LogIndexing("Test run mode: showing files that would be indexed\n")
 					return indexer.TestRun(context.Background(), cfg.Project.Root)
-				} else {
-					// Commands that need indexing
-					indexCommands := map[string]bool{
-						"search":      true,
-						"s":           true,
-						"grep":        true,
-						"g":           true,
-						"def":         true,
-						"d":           true,
-						"refs":        true,
-						"r":           true,
-						"stats":       true,
-						"tree":        true,
-						"t":           true,
-						"unroll":      true,
-						"u":           true,
-						"git-analyze": true,
-						"ga":          true,
-					}
-
-					if indexCommands[command] {
-						// For search/analysis commands, index synchronously
-						debug.LogIndexing("Building index...\n")
-						start := time.Now()
-						err := indexer.IndexDirectory(context.Background(), cfg.Project.Root)
-						if err != nil {
-							return fmt.Errorf("indexing error: %v", err)
-						}
-
-						// Show clean summary in CLI mode
-						if !debug.IsDebugEnabled() {
-							stats := indexer.Stats()
-							duration := time.Since(start)
-							fmt.Fprintf(os.Stderr, "Indexed %d files (%d symbols) in %v\n", stats.TotalFiles, stats.TotalSymbols, duration)
-						}
-					}
 				}
+				// Note: Commands like search, grep, def, refs, tree, stats, unroll, git-analyze
+				// use the server for indexing - no local indexing needed here
 			}
 
 			return nil
@@ -860,83 +813,6 @@ This will free all memory and close the socket.`,
 	}
 }
 
-func compareSearchImplementations(c *cli.Context, pattern string, maxLines int, caseInsensitive, light bool, excludePattern, includePattern string, verbose bool) error {
-	options := types.SearchOptions{
-		CaseInsensitive: caseInsensitive,
-		MaxContextLines: maxLines,
-		ExcludePattern:  excludePattern,
-		IncludePattern:  includePattern,
-		Verbose:         verbose,
-	}
-
-	fmt.Printf("🔍 Search Performance Test for pattern: %s\n\n", pattern)
-
-	// Test grep mode (fast)
-	fmt.Println("📊 Grep Mode (ultra-fast)")
-	var grepResults interface{}
-	var grepTime time.Duration
-
-	start := time.Now()
-	results, err := concurrentSearch(pattern, options)
-	if err != nil {
-		return fmt.Errorf("grep search failed: %w", err)
-	}
-	grepResults = results
-	grepTime = time.Since(start)
-
-	// Display grep results summary
-	grepCount := getResultCount(grepResults)
-	fmt.Printf("  ✅ Found %d results in %.1fms\n", grepCount, float64(grepTime.Microseconds())/1000.0)
-
-	// Test standard mode (with enhancement)
-	fmt.Println("\n📊 Standard Mode (with relational data)")
-	var standardResults interface{}
-	var standardTime time.Duration
-
-	start = time.Now()
-	if !light {
-		detailedResults, err := concurrentDetailedSearch(pattern, options)
-		if err != nil {
-			return fmt.Errorf("standard search failed: %w", err)
-		}
-		standardResults = detailedResults
-	} else {
-		results, err := concurrentSearch(pattern, options)
-		if err != nil {
-			return fmt.Errorf("light search failed: %w", err)
-		}
-		standardResults = results
-	}
-	standardTime = time.Since(start)
-
-	// Display standard results summary
-	standardCount := getResultCount(standardResults)
-	fmt.Printf("  ✅ Found %d results in %.1fms\n", standardCount, float64(standardTime.Microseconds())/1000.0)
-
-	// Display comparison
-	fmt.Println("\n📈 Performance Comparison")
-	fmt.Printf("  Grep Mode: %d results in %.1fms\n", grepCount, float64(grepTime.Microseconds())/1000.0)
-	fmt.Printf("  Standard Mode: %d results in %.1fms\n", standardCount, float64(standardTime.Microseconds())/1000.0)
-
-	if standardTime > grepTime {
-		speedup := float64(standardTime.Microseconds()) / float64(grepTime.Microseconds())
-		fmt.Printf("  🚀 Grep mode is %.1fx faster\n", speedup)
-	}
-
-	return nil
-}
-
-func getResultCount(results interface{}) int {
-	switch r := results.(type) {
-	case []search.GrepResult:
-		return len(r)
-	case []search.StandardResult:
-		return len(r)
-	default:
-		return 0
-	}
-}
-
 // isAssemblySearchCandidate checks if a pattern should trigger assembly search
 func isAssemblySearchCandidate(pattern string) bool {
 	// Don't run for very short patterns
@@ -982,76 +858,6 @@ func isAssemblySearchCandidate(pattern string) bool {
 	}
 
 	return false
-}
-
-// adapter functions to convert indexer methods to the expected interface
-func searchWithOptionsAdapter(ctx context.Context, pattern string, options types.SearchOptions) ([]search.GrepResult, error) {
-	// Call the indexer method and convert searchtypes.Result to search.GrepResult
-	results, err := indexer.SearchWithOptions(pattern, options)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert []searchtypes.Result to []search.GrepResult
-	convertedResults := make([]search.GrepResult, len(results))
-	copy(convertedResults, results)
-	return convertedResults, nil
-}
-
-func searchDetailedWithOptionsAdapter(ctx context.Context, pattern string, options types.SearchOptions) ([]search.StandardResult, error) {
-	// Call the indexer method and convert searchtypes.DetailedResult to search.StandardResult
-	results, err := indexer.SearchDetailedWithOptions(pattern, options)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert []searchtypes.DetailedResult to []search.StandardResult
-	convertedResults := make([]search.StandardResult, len(results))
-	copy(convertedResults, results)
-	return convertedResults, nil
-}
-
-// concurrentSearch performs a search using the concurrent search coordination system
-func concurrentSearch(pattern string, options types.SearchOptions) ([]search.GrepResult, error) {
-	if searchCoordinator == nil {
-		// Fallback to direct indexer search if coordinator not available
-		return searchWithOptionsAdapter(context.Background(), pattern, options)
-	}
-
-	// Use the search coordinator for concurrent operations
-	result, err := searchCoordinator.Search(context.Background(), pattern, options, searchWithOptionsAdapter)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Results, err
-}
-
-// concurrentDetailedSearch performs a detailed search using the concurrent search coordination system
-func concurrentDetailedSearch(pattern string, options types.SearchOptions) ([]search.StandardResult, error) {
-	if searchCoordinator == nil {
-		// Fallback to direct indexer search if coordinator not available
-		return searchDetailedWithOptionsAdapter(context.Background(), pattern, options)
-	}
-
-	// Use the search coordinator for concurrent operations
-	result, err := searchCoordinator.SearchDetailed(context.Background(), pattern, options, searchDetailedWithOptionsAdapter)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert basic results back to detailed results
-	// This is a simple conversion - in a real implementation we'd want to preserve detailed information
-	detailedResults := make([]search.StandardResult, len(result.Results))
-	for i, res := range result.Results {
-		detailedResults[i] = search.StandardResult{
-			Result: res,
-			// Note: In a full implementation, we'd preserve detailed analysis data
-			// For now, this provides the concurrent search functionality
-		}
-	}
-
-	return detailedResults, nil
 }
 
 func grepCommand(c *cli.Context) error {
@@ -1117,16 +923,35 @@ func definitionCommand(c *cli.Context) error {
 	}
 
 	symbol := c.Args().First()
-	results, err := indexer.SearchDefinitions(symbol)
+	maxResults := c.Int("max-results")
+	if maxResults == 0 {
+		maxResults = 100 // Default max results
+	}
+
+	// Load configuration
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Ensure server is running (auto-start if needed)
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
+	// Use server's definition endpoint
+	results, err := client.GetDefinition(symbol, maxResults)
 	if err != nil {
 		return fmt.Errorf("definition search failed: %w", err)
 	}
 
+	// Output format: file:line: signature or name
 	for _, r := range results {
-		if len(r.Context.Lines) > 0 {
-			fmt.Printf("%s:%d: %s\n", r.Path, r.Line, r.Context.Lines[0])
+		if r.Signature != "" {
+			fmt.Printf("%s:%d: %s\n", r.FilePath, r.Line, r.Signature)
 		} else {
-			fmt.Printf("%s:%d: %s\n", r.Path, r.Line, r.Match)
+			fmt.Printf("%s:%d: %s %s\n", r.FilePath, r.Line, r.Type, r.Name)
 		}
 	}
 
@@ -1139,16 +964,35 @@ func referencesCommand(c *cli.Context) error {
 	}
 
 	symbol := c.Args().First()
-	results, err := indexer.SearchReferences(symbol)
+	maxResults := c.Int("max-results")
+	if maxResults == 0 {
+		maxResults = 100 // Default max results
+	}
+
+	// Load configuration
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Ensure server is running (auto-start if needed)
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
+	// Use server's references endpoint
+	results, err := client.GetReferences(symbol, maxResults)
 	if err != nil {
 		return fmt.Errorf("references search failed: %w", err)
 	}
 
+	// Output format: file:line: context or match (maintaining same format as before)
 	for _, r := range results {
-		if len(r.Context.Lines) > 0 {
-			fmt.Printf("%s:%d: %s\n", r.Path, r.Line, r.Context.Lines[0])
+		if r.Context != "" {
+			fmt.Printf("%s:%d: %s\n", r.FilePath, r.Line, r.Context)
 		} else {
-			fmt.Printf("%s:%d: %s\n", r.Path, r.Line, r.Match)
+			fmt.Printf("%s:%d: %s\n", r.FilePath, r.Line, r.Match)
 		}
 	}
 
@@ -1192,14 +1036,20 @@ func treeCommand(c *cli.Context) error {
 	excludePattern := c.String("exclude")
 	agentMode := c.Bool("agent")
 
+	// Load configuration
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Ensure server is running (auto-start if needed)
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
 	start := time.Now()
-	tree, err := indexer.GenerateFunctionTree(functionName, types.TreeOptions{
-		MaxDepth:       maxDepth,
-		ShowLines:      showLines,
-		Compact:        compact,
-		ExcludePattern: excludePattern,
-		AgentMode:      agentMode,
-	})
+	tree, err := client.GetTree(functionName, maxDepth, showLines, compact, agentMode, excludePattern)
 	if err != nil {
 		return fmt.Errorf("error generating tree: %v", err)
 	}

@@ -107,14 +107,16 @@ func TestCLICommands(t *testing.T) {
 		validate func(t *testing.T, output string, err error)
 	}{
 		{
-			name: "search command - index, compute, shutdown",
+			name: "search command - server mode",
 			args: []string{"search", "main"},
 			validate: func(t *testing.T, output string, err error) {
 				assert.NoError(t, err)
-				assert.Contains(t, output, "Indexed")
-				assert.Contains(t, output, "files")
+				// Server-based architecture: CLI connects to server instead of local indexing
+				// The server handles indexing in background, CLI just queries
 				assert.Contains(t, output, "main.go")
 				assert.Contains(t, output, "func main")
+				// Verify we got search results (not "Indexed" - that was removed in server architecture)
+				assert.Contains(t, output, "Found")
 			},
 		},
 		{
@@ -131,45 +133,46 @@ func TestCLICommands(t *testing.T) {
 						jsonOutput := output[jsonStart:]
 						err = json.Unmarshal([]byte(jsonOutput), &result)
 						if err == nil {
-							assert.Contains(t, result, "matches")
+							// JSON output uses "results" field, not "matches"
+							assert.Contains(t, result, "results")
 						}
 					}
 				}
 			},
 		},
 		{
-			name: "definition command - index, compute, shutdown",
+			name: "definition command - server mode",
 			args: []string{"def", "HelperFunction"},
 			validate: func(t *testing.T, output string, err error) {
 				assert.NoError(t, err)
-				assert.Contains(t, output, "Indexed")
-				// Definition command shows the symbol definition
-				// Output should either show the definition or be empty
-				// The test passes as long as it doesn't error
+				// Definition command shows the symbol definition via server
+				// Output should contain file path and line number
+				assert.Contains(t, output, "helper.go")
 			},
 		},
 		{
-			name: "references command - index, compute, shutdown",
+			name: "references command - server mode",
 			args: []string{"refs", "HelperFunction"},
 			validate: func(t *testing.T, output string, err error) {
 				assert.NoError(t, err)
-				assert.Contains(t, output, "Indexed")
-				// References may or may not find anything for HelperFunction
-				// Just verify the command runs without error
+				// References command finds all usages via server
+				// Should find at least the definition and the call site
+				assert.Contains(t, output, "helper.go")
 			},
 		},
 		{
-			name: "tree command - index, compute, shutdown",
+			name: "tree command - server mode",
 			args: []string{"tree", "main"},
 			validate: func(t *testing.T, output string, err error) {
 				// Tree command might fail if function not found
 				if err != nil {
 					t.Logf("Tree command error: %v, output: %s", err, output)
 				}
-				assert.Contains(t, output, "Indexed")
 				// Either shows the tree or an error message
 				if err == nil {
 					assert.Contains(t, output, "main")
+					// Tree output shows function hierarchy
+					assert.Contains(t, output, "tree")
 				}
 			},
 		},
@@ -199,8 +202,8 @@ func TestCLICommands(t *testing.T) {
 	}
 }
 
-// TestIndexComputeShutdownWorkflow specifically tests the three-phase workflow
-func TestIndexComputeShutdownWorkflow(t *testing.T) {
+// TestServerBasedSearchWorkflow tests the server-based search workflow
+func TestServerBasedSearchWorkflow(t *testing.T) {
 	projectDir := setupTestProject(t)
 
 	oldDir, err := os.Getwd()
@@ -210,18 +213,18 @@ func TestIndexComputeShutdownWorkflow(t *testing.T) {
 	err = os.Chdir(projectDir)
 	require.NoError(t, err)
 
-	// Test search workflow
+	// Test search workflow - now server-based
 	output, err := runCLICommand("search", "processData")
 	require.NoError(t, err)
 
-	// Verify all three phases are present
-	assert.Contains(t, output, "Indexed", "Index phase should be present")
-	assert.Contains(t, output, "files", "Index completion should be reported")
-	assert.Contains(t, output, "processData", "Compute phase should find results")
+	// Verify server-based search works
+	// Server handles indexing in background, CLI just queries
+	assert.Contains(t, output, "processData", "Search should find results")
 	assert.Contains(t, output, "main.go", "Results should include file path")
+	assert.Contains(t, output, "Found", "Should show result count")
 
-	// Verify clean shutdown (no error)
-	assert.NoError(t, err, "Shutdown should be clean")
+	// Verify clean execution (no error)
+	assert.NoError(t, err, "Search should complete cleanly")
 }
 
 // TestCLIDiagnosticCapabilities tests the CLI's diagnostic features for MCP debugging
@@ -248,21 +251,22 @@ func TestCLIDiagnosticCapabilities(t *testing.T) {
 			err = json.Unmarshal([]byte(jsonOutput), &result)
 			if err == nil {
 				// Verify diagnostic fields are present
-				assert.Contains(t, result, "matches", "Should have matches field")
-				if _, ok := result["stats"]; ok {
-					assert.Contains(t, result, "stats", "Should have stats for diagnostics")
+				// Server-based architecture uses "results" field
+				assert.Contains(t, result, "results", "Should have results field")
+				// Check for timing info
+				if _, ok := result["time_ms"]; ok {
+					assert.Contains(t, result, "time_ms", "Should have timing info")
 				}
 			}
 		}
 	}
 
-	// Test 2: Test error diagnostics
+	// Test 2: Test error diagnostics - non-existent function
 	output, err = runCLICommand("def", "NonExistentFunction")
-	// Should not error, but should provide diagnostic info
+	// Should not error, but may return empty results
 	assert.NoError(t, err)
-	assert.Contains(t, output, "Indexed")
-	// Definition command might not show "No definition found" message
-	// Just verify it completes without error
+	// Definition command runs via server - just verify it completes
+	// Empty result is acceptable for non-existent function
 }
 
 // TestCLIErrorHandling tests error scenarios
@@ -288,7 +292,7 @@ func TestCLIErrorHandling(t *testing.T) {
 			expectErr: false,
 			validate: func(t *testing.T, output string, err error) {
 				assert.NoError(t, err)
-				assert.Contains(t, output, "Indexed")
+				// Server-based search completes without error
 				// Search with no results shows "Found 0" message
 				assert.Contains(t, output, "Found 0")
 			},

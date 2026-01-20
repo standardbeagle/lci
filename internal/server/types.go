@@ -82,3 +82,82 @@ type ReindexResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
 }
+
+// StatsRequest requests index statistics
+type StatsRequest struct{}
+
+// StatsResponse contains index statistics
+type StatsResponse struct {
+	FileCount       int     `json:"file_count"`
+	SymbolCount     int     `json:"symbol_count"`
+	IndexSizeBytes  int64   `json:"index_size_bytes"`
+	BuildDurationMs int64   `json:"build_duration_ms"`
+	MemoryAllocMB   float64 `json:"memory_alloc_mb"`
+	MemoryTotalMB   float64 `json:"memory_total_mb"`
+	MemoryHeapMB    float64 `json:"memory_heap_mb"`
+	NumGoroutines   int     `json:"num_goroutines"`
+	UptimeSeconds   float64 `json:"uptime_seconds"`
+	SearchCount     int64   `json:"search_count,omitempty"`
+	AvgSearchTimeMs float64 `json:"avg_search_time_ms,omitempty"`
+	Error           string  `json:"error,omitempty"`
+}
+
+// DefinitionRequest requests symbol definition locations
+type DefinitionRequest struct {
+	Pattern    string `json:"pattern"`               // Symbol name pattern to search for
+	MaxResults int    `json:"max_results,omitempty"` // Maximum number of results to return
+}
+
+// DefinitionLocation represents a single definition location
+type DefinitionLocation struct {
+	Name       string `json:"name"`        // Symbol name
+	Type       string `json:"type"`        // Symbol type (function, class, struct, interface, type, method)
+	FilePath   string `json:"file_path"`   // Full file path
+	Line       int    `json:"line"`        // Line number (1-based)
+	Column     int    `json:"column"`      // Column number (0-based)
+	Signature  string `json:"signature,omitempty"`   // Function/method signature if available
+	DocComment string `json:"doc_comment,omitempty"` // Documentation comment if available
+}
+
+// DefinitionResponse contains definition search results
+type DefinitionResponse struct {
+	Definitions []DefinitionLocation `json:"definitions"`
+	Error       string               `json:"error,omitempty"`
+}
+
+// ReferencesRequest requests symbol reference locations (usages)
+type ReferencesRequest struct {
+	Pattern    string `json:"pattern"`               // Symbol name pattern to search for
+	MaxResults int    `json:"max_results,omitempty"` // Maximum number of results to return
+}
+
+// ReferenceLocation represents a single reference location
+type ReferenceLocation struct {
+	FilePath string `json:"file_path"` // Full file path
+	Line     int    `json:"line"`      // Line number (1-based)
+	Column   int    `json:"column"`    // Column number (0-based)
+	Context  string `json:"context"`   // Line content or surrounding context
+	Match    string `json:"match"`     // The matched text
+}
+
+// ReferencesResponse contains reference search results
+type ReferencesResponse struct {
+	References []ReferenceLocation `json:"references"`
+	Error      string              `json:"error,omitempty"`
+}
+
+// TreeRequest requests a function call tree
+type TreeRequest struct {
+	FunctionName string `json:"function_name"`          // Function name to generate tree for
+	MaxDepth     int    `json:"max_depth,omitempty"`    // Maximum depth to traverse (0 = unlimited)
+	ShowLines    bool   `json:"show_lines,omitempty"`   // Include line numbers
+	Compact      bool   `json:"compact,omitempty"`      // Use compact output format
+	Exclude      string `json:"exclude,omitempty"`      // Pattern to exclude from tree
+	AgentMode    bool   `json:"agent_mode,omitempty"`   // Enable agent-friendly output with safety info
+}
+
+// TreeResponse contains the function call tree
+type TreeResponse struct {
+	Tree  *types.FunctionTree `json:"tree,omitempty"`
+	Error string              `json:"error,omitempty"`
+}

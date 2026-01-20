@@ -26,6 +26,8 @@ func TestWatcherIntegration_AutomaticFileUpdate(t *testing.T) {
 	}
 
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create initial file
 	initialContent := `package test
@@ -55,6 +57,7 @@ func OriginalWatchedFunction() string {
 	// Create server - it will handle indexing and start watching
 	srv, err := NewIndexServer(cfg)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 
 	err = srv.Start()
 	require.NoError(t, err)
@@ -64,7 +67,7 @@ func OriginalWatchedFunction() string {
 	time.Sleep(1 * time.Second)
 
 	// Create client
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 	require.True(t, client.IsServerRunning())
 
 	// Verify original function found
@@ -147,6 +150,8 @@ func TestWatcherIntegration_NewFileDetection(t *testing.T) {
 	}
 
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create initial file
 	initialContent := `package test
@@ -180,11 +185,12 @@ func InitialFunction() {}
 	// Start server
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 
 	// Verify initial function found
 	results, err := client.Search("InitialFunction", types.SearchOptions{}, 100)
@@ -234,6 +240,8 @@ func TestWatcherIntegration_FileDeleteDetection(t *testing.T) {
 	}
 
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Create two files
 	keepContent := `package test
@@ -273,11 +281,12 @@ func DeleteThisFunction() {}
 
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 
 	// Verify both functions found initially
 	results, err := client.Search("KeepThisFunction", types.SearchOptions{}, 100)
@@ -332,6 +341,8 @@ func TestWatcherIntegration_MultipleSequentialEdits(t *testing.T) {
 	}
 
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 	testFile := filepath.Join(testDir, "multi.go")
 
 	// Version 1
@@ -364,11 +375,12 @@ func Version1Function() {}
 
 	srv, err := NewIndexServerWithIndex(cfg, externalIndexer, searchEngine)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
-	client := NewClient()
+	client := NewClientWithSocket(socketPath)
 
 	// Verify Version1 found
 	results, err := client.Search("Version1Function", types.SearchOptions{}, 100)
@@ -425,6 +437,8 @@ func TestWatcherIntegration_MCPScenario(t *testing.T) {
 	}
 
 	testDir := t.TempDir()
+	socketPath := getTestSocketPath(t)
+	defer os.Remove(socketPath)
 
 	// Simulate MCP starting with file watching
 	initialContent := `package test
@@ -467,12 +481,13 @@ func (s *UserService) GetUser(id string) (*User, error) {
 	// MCP starts shared index server
 	srv, err := NewIndexServerWithIndex(cfg, mcpIndexer, searchEngine)
 	require.NoError(t, err)
+	srv.SetSocketPath(socketPath)
 	err = srv.Start()
 	require.NoError(t, err)
 	defer srv.Shutdown(context.Background())
 
 	// CLI client connects to MCP's shared server
-	cliClient := NewClient()
+	cliClient := NewClientWithSocket(socketPath)
 	require.True(t, cliClient.IsServerRunning(), "CLI should connect to MCP's server")
 
 	// CLI searches for UserService

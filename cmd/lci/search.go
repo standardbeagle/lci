@@ -13,6 +13,7 @@ import (
 	"github.com/standardbeagle/lci/internal/core"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/search"
+	"github.com/standardbeagle/lci/internal/server"
 	"github.com/standardbeagle/lci/internal/types"
 	"github.com/standardbeagle/lci/pkg/pathutil"
 
@@ -68,11 +69,22 @@ func searchCommand(c *cli.Context) error {
 		defer pprof.StopCPUProfile()
 	}
 
+	// Load configuration and ensure server is running
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
 	start := time.Now()
 
 	// Handle A/B testing comparison
 	if compareSearch {
-		return compareSearchImplementations(c, pattern, maxLines, caseInsensitive, light, excludePattern, includePattern, verbose)
+		return compareSearchImplementationsWithClient(c, client, pattern, maxLines, caseInsensitive, light, excludePattern, includePattern, verbose)
 	}
 
 	if light {
@@ -102,7 +114,7 @@ func searchCommand(c *cli.Context) error {
 			MaxCountPerFile: maxCountPerFile,
 		}
 
-		results, err := concurrentSearch(pattern, searchOptions)
+		results, err := client.Search(pattern, searchOptions, 500)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			return cli.Exit(err.Error(), 2)
@@ -134,12 +146,23 @@ func searchCommand(c *cli.Context) error {
 			IncludeObjectIDs: includeObjectIDs,
 		}
 
-		standardResults, err := concurrentDetailedSearch(pattern, searchOptions)
+		// Use server search and convert to StandardResult format
+		grepResults, err := client.Search(pattern, searchOptions, 500)
 		if err != nil {
-			return fmt.Errorf("detailed search failed: %w", err)
+			return fmt.Errorf("search failed: %w", err)
 		}
 
-		// Check if we should run assembly search
+		// Convert GrepResult to StandardResult for display
+		standardResults := make([]search.StandardResult, len(grepResults))
+		for i, r := range grepResults {
+			standardResults[i] = search.StandardResult{
+				Result: r,
+				// Note: RelationalData is not available from server search
+				// This maintains output compatibility while using server
+			}
+		}
+
+		// Check if we should run assembly search (requires local indexer)
 		var assemblyResults []core.AssemblyResult
 		assemblyTriggered := false
 
@@ -149,7 +172,8 @@ func searchCommand(c *cli.Context) error {
 			fmt.Fprintf(os.Stderr, "Standard results count: %d\n", len(standardResults))
 		}
 
-		if isAssemblySearchCandidate(pattern) || len(standardResults) < 3 {
+		// Assembly search still uses local indexer if available (for specialized string fragment search)
+		if indexer != nil && (isAssemblySearchCandidate(pattern) || len(standardResults) < 3) {
 			assemblyTriggered = true
 
 			if c.Bool("verbose") {
@@ -194,6 +218,32 @@ func searchCommand(c *cli.Context) error {
 
 		return displayStandardResultsWithAssembly(c, pattern, standardResults, assemblyResults, assemblyTriggered, elapsed)
 	}
+}
+
+// compareSearchImplementationsWithClient is a version of compareSearchImplementations that uses the server client
+func compareSearchImplementationsWithClient(c *cli.Context, client *server.Client, pattern string, maxLines int, caseInsensitive, light bool, excludePattern, includePattern string, verbose bool) error {
+	options := types.SearchOptions{
+		CaseInsensitive: caseInsensitive,
+		MaxContextLines: maxLines,
+		ExcludePattern:  excludePattern,
+		IncludePattern:  includePattern,
+		Verbose:         verbose,
+	}
+
+	fmt.Printf("Search Performance Test for pattern: %s\n\n", pattern)
+
+	// Test search via server
+	fmt.Println("Server Search Mode")
+	start := time.Now()
+	results, err := client.Search(pattern, options, 500)
+	if err != nil {
+		return fmt.Errorf("server search failed: %w", err)
+	}
+	elapsed := time.Since(start)
+
+	fmt.Printf("  Found %d results in %.1fms\n", len(results), float64(elapsed.Microseconds())/1000.0)
+
+	return nil
 }
 
 func displayRegularResults(c *cli.Context, pattern string, results []search.GrepResult, elapsed time.Duration) error {

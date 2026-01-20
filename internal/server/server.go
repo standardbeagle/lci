@@ -16,6 +16,7 @@ import (
 	"github.com/standardbeagle/lci/internal/debug"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/search"
+	"github.com/standardbeagle/lci/internal/types"
 	"github.com/standardbeagle/lci/internal/version"
 )
 
@@ -194,6 +195,10 @@ func (s *IndexServer) registerHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/shutdown", s.handleShutdown)
 	mux.HandleFunc("/ping", s.handlePing)
 	mux.HandleFunc("/reindex", s.handleReindex)
+	mux.HandleFunc("/stats", s.handleStats)
+	mux.HandleFunc("/definition", s.handleDefinition)
+	mux.HandleFunc("/references", s.handleReferences)
+	mux.HandleFunc("/tree", s.handleTree)
 }
 
 // handleStatus returns the current index status
@@ -323,6 +328,225 @@ func (s *IndexServer) handlePing(w http.ResponseWriter, r *http.Request) {
 	response := PingResponse{
 		Uptime:  uptime,
 		Version: version.Version,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleStats returns index statistics including file count, symbol count, and memory usage
+func (s *IndexServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get index stats from the indexer
+	indexStats := s.indexer.Stats()
+
+	// Get memory stats
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	// Extract search statistics from AdditionalStats
+	var searchCount int64
+	var avgSearchTimeMs float64
+	if indexStats.AdditionalStats != nil {
+		if sc, ok := indexStats.AdditionalStats["search_count"].(int64); ok {
+			searchCount = sc
+		}
+		if ast, ok := indexStats.AdditionalStats["avg_search_time_ms"].(float64); ok {
+			avgSearchTimeMs = ast
+		}
+	}
+
+	response := StatsResponse{
+		FileCount:       indexStats.TotalFiles,
+		SymbolCount:     indexStats.TotalSymbols,
+		IndexSizeBytes:  indexStats.IndexSize,
+		BuildDurationMs: indexStats.BuildDuration.Milliseconds(),
+		MemoryAllocMB:   float64(memStats.Alloc) / 1024 / 1024,
+		MemoryTotalMB:   float64(memStats.TotalAlloc) / 1024 / 1024,
+		MemoryHeapMB:    float64(memStats.HeapAlloc) / 1024 / 1024,
+		NumGoroutines:   runtime.NumGoroutine(),
+		UptimeSeconds:   time.Since(s.startTime).Seconds(),
+		SearchCount:     searchCount,
+		AvgSearchTimeMs: avgSearchTimeMs,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleDefinition searches for symbol definitions by name pattern
+func (s *IndexServer) handleDefinition(w http.ResponseWriter, r *http.Request) {
+	var req DefinitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	engine := s.searchEngine
+	s.mu.RUnlock()
+
+	if engine == nil {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Build search options for definition search
+	searchOpts := types.SearchOptions{
+		SymbolTypes: []string{"function", "class", "struct", "interface", "type", "method"},
+		DeclarationOnly: true, // Only find definitions, not usages
+	}
+
+	// Perform search using engine
+	results := engine.SearchWithOptions(req.Pattern, nil, searchOpts)
+
+	// Limit results if requested
+	if req.MaxResults > 0 && len(results) > req.MaxResults {
+		results = results[:req.MaxResults]
+	}
+
+	// Convert results to DefinitionLocation structs
+	definitions := make([]DefinitionLocation, 0, len(results))
+	for _, result := range results {
+		// Prefer BlockName as it's the actual symbol name from the index
+		// Fall back to Match if BlockName is empty
+		name := result.Context.BlockName
+		if name == "" {
+			name = result.Match
+		}
+
+		def := DefinitionLocation{
+			Name:     name,
+			Type:     result.Context.BlockType,
+			FilePath: result.Path,
+			Line:     result.Line,
+			Column:   result.Column,
+		}
+
+		definitions = append(definitions, def)
+	}
+
+	response := DefinitionResponse{
+		Definitions: definitions,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleTree generates a function call hierarchy tree
+func (s *IndexServer) handleTree(w http.ResponseWriter, r *http.Request) {
+	var req TreeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Build tree options from request
+	treeOpts := types.TreeOptions{
+		MaxDepth:       req.MaxDepth,
+		ShowLines:      req.ShowLines,
+		Compact:        req.Compact,
+		ExcludePattern: req.Exclude,
+		AgentMode:      req.AgentMode,
+	}
+
+	// Generate the function tree using the indexer
+	tree, err := s.indexer.GenerateFunctionTree(req.FunctionName, treeOpts)
+	if err != nil {
+		response := TreeResponse{
+			Error: fmt.Sprintf("failed to generate tree: %v", err),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	response := TreeResponse{
+		Tree: tree,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleReferences searches for symbol references (usages, not definitions)
+func (s *IndexServer) handleReferences(w http.ResponseWriter, r *http.Request) {
+	var req ReferencesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	engine := s.searchEngine
+	s.mu.RUnlock()
+
+	if engine == nil {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Build search options for reference search
+	// Unlike definition search, we don't set DeclarationOnly=true
+	// This will find all usages of the symbol, not just declarations
+	searchOpts := types.SearchOptions{
+		DeclarationOnly: false, // Get all usages, not just declarations
+	}
+
+	// Perform search using engine
+	results := engine.SearchWithOptions(req.Pattern, nil, searchOpts)
+
+	// Limit results if requested
+	if req.MaxResults > 0 && len(results) > req.MaxResults {
+		results = results[:req.MaxResults]
+	}
+
+	// Convert results to ReferenceLocation structs
+	references := make([]ReferenceLocation, 0, len(results))
+	for _, result := range results {
+		// Get context from the Lines slice
+		contextStr := ""
+		if len(result.Context.Lines) > 0 {
+			// Find the line containing the match (relative index)
+			lineIdx := result.Line - result.Context.StartLine
+			if lineIdx >= 0 && lineIdx < len(result.Context.Lines) {
+				contextStr = result.Context.Lines[lineIdx]
+			} else {
+				// Fallback to first line if index is out of range
+				contextStr = result.Context.Lines[0]
+			}
+		}
+
+		ref := ReferenceLocation{
+			FilePath: result.Path,
+			Line:     result.Line,
+			Column:   result.Column,
+			Context:  contextStr,
+			Match:    result.Match,
+		}
+		references = append(references, ref)
+	}
+
+	response := ReferencesResponse{
+		References: references,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
