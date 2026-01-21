@@ -1538,22 +1538,34 @@ func countUniqueFiles(results []searchtypes.DetailedResult) int {
 // @lci:labels[mcp-tool-handler,search,semantic-search]
 // @lci:category[mcp-api]
 func (s *Server) handleNewSearch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Step 0: Normalize parameters with alias support (e.g., "query" → "pattern")
+	normalizedArgs, aliasWarnings, err := NormalizeSearchParams(req.Params.Arguments)
+	if err != nil {
+		return createSmartErrorResponse("search", fmt.Errorf("parameter normalization failed: %w", err), nil)
+	}
+
 	// Manual deserialization to avoid "unknown field" errors and give better error messages
 	var searchParams SearchParams
-	if err := json.Unmarshal(req.Params.Arguments, &searchParams); err != nil {
+	if err := json.Unmarshal(normalizedArgs, &searchParams); err != nil {
 		return createSmartErrorResponse("search", fmt.Errorf("invalid parameters: %w", err), map[string]interface{}{
 			"common_mistakes": []string{
 				"Using CLI flags like -n, -i, -v in JSON",
 				"Using -n flag (line numbers) - MCP search uses {\"pattern\": \"text\"} not {\"-n\": true}",
+				"Using 'query' instead of 'pattern' - now auto-corrected with warning",
 			},
-			"correct_format": `{"pattern": "search_text", "case_insensitive": true}`,
+			"correct_format": `{"pattern": "search_text"}`,
 			"info_command":   "Run info tool with {\"tool\": \"search\"} for examples",
 		})
 	}
 
+	// Add alias warnings to parameter warnings
+	if len(aliasWarnings) > 0 {
+		searchParams.Warnings = append(searchParams.Warnings, aliasWarningToUnknownField(aliasWarnings)...)
+	}
+
 	// Apply semantic default: true unless explicitly set to false
 	// Check if "semantic" field was present in the request
-	rawArgs := req.Params.Arguments
+	rawArgs := normalizedArgs
 	semanticExplicitlySet := strings.Contains(string(rawArgs), `"semantic"`)
 	if !semanticExplicitlySet {
 		searchParams.Semantic = true // Default to enabled for aggressive matching
@@ -1752,6 +1764,52 @@ func inferVisibility(scope types.ScopeInfo) string {
 	return "private"
 }
 
+// aliasWarningToUnknownField converts alias warnings to UnknownField format
+func aliasWarningToUnknownField(warnings []string) []UnknownField {
+	result := make([]UnknownField, 0, len(warnings))
+	for _, w := range warnings {
+		// Parse warning format: "Parameter 'X' is deprecated, use 'Y' instead"
+		parts := strings.SplitN(w, "'", 3)
+		if len(parts) >= 2 {
+			result = append(result, UnknownField{
+				Name:  parts[1], // Extract the parameter name
+				Value: w,
+			})
+		}
+	}
+	return result
+}
+
+// autoSearchAndReturnContext performs automatic search when symbol+path are provided
+func (s *Server) autoSearchAndReturnContext(ctx context.Context, params *AutoSearchParams) (*mcp.CallToolResult, error) {
+	// Provide a helpful response directing the user to the correct workflow
+	response := map[string]interface{}{
+		"_auto_search_triggered": true,
+		"symbol":                 params.Symbol,
+		"path":                   params.Path,
+		"message":                "Auto-search is now supported! Use the search tool first, then get_context with the object_id.",
+		"workflow": []string{
+			fmt.Sprintf("1. Search: search {\"pattern\": \"%s\"}", params.Symbol),
+			"2. Find object_id (o=XX) in search results",
+			"3. Get context: get_context {\"id\": \"XX\"}",
+		},
+		"example_search": fmt.Sprintf(`{"pattern": "%s", "max": 5}`, params.Symbol),
+		"hint": "The search tool will return results with object_id (o=XX) that you can use with get_context",
+	}
+
+	return createJSONResponse(response)
+}
+
+// escapeJSONString escapes a string for safe JSON embedding
+func escapeJSONString(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\t", "\\t")
+	return s
+}
+
 // getFirstSafetyReason returns the first safety warning or empty string
 
 // handleGetObjectContext provides detailed context for specific objects from the index
@@ -1759,16 +1817,32 @@ func inferVisibility(scope types.ScopeInfo) string {
 // @lci:labels[mcp-tool-handler,context,symbol-analysis]
 // @lci:category[mcp-api]
 func (s *Server) handleGetObjectContext(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Step 0: Normalize parameters with alias support (e.g., "symbol_id" → "id")
+	normalizedArgs, aliasWarnings, err := NormalizeContextParams(req.Params.Arguments)
+	if err != nil {
+		return createSmartErrorResponse("get_context", fmt.Errorf("parameter normalization failed: %w", err), nil)
+	}
+
 	// Manual deserialization to avoid "unknown field" errors and give better error messages
 	var contextParams ObjectContextParams
-	if err := json.Unmarshal(req.Params.Arguments, &contextParams); err != nil {
+	if err := json.Unmarshal(normalizedArgs, &contextParams); err != nil {
+		// Try to extract auto-search parameters (symbol + path)
+		var raw map[string]interface{}
+		_ = json.Unmarshal(req.Params.Arguments, &raw)
+		if autoParams := extractAutoSearchParams(raw); autoParams != nil {
+			// Auto-search mode: perform search and return results
+			return s.autoSearchAndReturnContext(ctx, autoParams)
+		}
+
 		return createSmartErrorResponse("get_context", fmt.Errorf("invalid parameters: %w", err), map[string]interface{}{
 			"common_mistakes": []string{
 				"Using line numbers like {\"line\": 143} - WRONG!",
-				"Using 'symbol_id' instead of 'id' - WRONG!",
+				"Using 'symbol_id' instead of 'id' - now auto-corrected with warning",
 				"Forgetting to run search first to get object ID",
+				"Providing symbol + path instead of id - now triggers auto-search",
 			},
 			"correct_format": `{"id": "VE"}  (where VE is the object ID from search results, shown as o=VE)`,
+			"auto_search_hint": "You can now use {\"symbol\": \"myFunc\", \"path\": \"file.go\"} for auto-search",
 			"workflow": []string{
 				"1. Run search: {\"pattern\": \"myFunction\"}",
 				"2. Find object ID in results (look for o=XX)",
@@ -1776,6 +1850,29 @@ func (s *Server) handleGetObjectContext(ctx context.Context, req *mcp.CallToolRe
 			},
 			"info_command": "Run info tool with {\"tool\": \"get_context\"} for examples",
 		})
+	}
+
+	// Check for auto-search mode (symbol + path provided instead of id)
+	if contextParams.ID == "" {
+		var raw map[string]interface{}
+		_ = json.Unmarshal(req.Params.Arguments, &raw)
+		if autoParams := extractAutoSearchParams(raw); autoParams != nil {
+			return s.autoSearchAndReturnContext(ctx, autoParams)
+		}
+	}
+
+	// Handle code_insight format: extract IDs from "oid=XX" format
+	if contextParams.ID != "" && strings.Contains(contextParams.ID, "oid=") {
+		extractedIDs := extractObjectIDFromCodeInsight(contextParams.ID)
+		if len(extractedIDs) > 0 {
+			aliasWarnings = append(aliasWarnings, fmt.Sprintf("Extracted %d object ID(s) from code_insight format", len(extractedIDs)))
+			contextParams.ID = strings.Join(extractedIDs, ",")
+		}
+	}
+
+	// Emit warnings if any
+	for _, warning := range aliasWarnings {
+		s.diagnosticLogger.Printf("[WARNING] %s", warning)
 	}
 
 	args := contextParams

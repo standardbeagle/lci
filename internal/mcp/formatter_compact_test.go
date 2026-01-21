@@ -225,8 +225,16 @@ func TestCompactFormatter_FormatIntelligenceResponse_DetailedSmells(t *testing.T
 	if !strings.Contains(output, "[high] long-function: processAllData") {
 		t.Error("Expected detailed smell entry with severity")
 	}
-	if !strings.Contains(output, "oid=ABC123") {
-		t.Error("Expected object ID for drill-down")
+	// Check for new [o=XX] format
+	if !strings.Contains(output, "[o=ABC123]") {
+		t.Error("Expected object ID for drill-down in [o=XX] format")
+	}
+	// Verify workflow hint is present
+	if !strings.Contains(output, "OBJECT IDs") {
+		t.Error("Expected workflow hint section")
+	}
+	if !strings.Contains(output, "get_context") {
+		t.Error("Expected get_context in workflow hint")
 	}
 }
 
@@ -266,8 +274,9 @@ func TestCompactFormatter_FormatIntelligenceResponse_ProblematicSymbols(t *testi
 	if !strings.Contains(output, "[HIGH_COMPLEXITY,DEEP_NESTING,MANY_DEPS]") {
 		t.Error("Expected tags in output")
 	}
-	if !strings.Contains(output, "oid=XYZ789") {
-		t.Error("Expected object ID for drill-down")
+	// Check for new [o=XX] format
+	if !strings.Contains(output, "[o=XYZ789]") {
+		t.Error("Expected object ID for drill-down in [o=XX] format")
 	}
 }
 

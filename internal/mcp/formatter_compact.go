@@ -218,6 +218,11 @@ func (f *CompactFormatter) FormatIntelligenceResponse(response *CodebaseIntellig
 
 	lines = append(lines, f.formatStatisticsSection(response.StatisticsReport)...)
 
+	// Add workflow hint if object IDs are present
+	if hasObjectIDs(response) {
+		lines = append(lines, formatWorkflowHint()...)
+	}
+
 	// Analysis metadata (conditional)
 	if f.IncludeMetadata {
 		lines = append(lines, "== METADATA ==")
@@ -228,6 +233,31 @@ func (f *CompactFormatter) FormatIntelligenceResponse(response *CodebaseIntellig
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// hasObjectIDs checks if the response contains any object IDs that can be used with get_context
+func hasObjectIDs(response *CodebaseIntelligenceResponse) bool {
+	if response.HealthDashboard != nil {
+		if len(response.HealthDashboard.DetailedSmells) > 0 {
+			return true
+		}
+		if len(response.HealthDashboard.ProblematicSymbols) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// formatWorkflowHint returns a helpful workflow hint for using object IDs
+func formatWorkflowHint() []string {
+	return []string{
+		"---",
+		"== OBJECT IDs ==",
+		"Use [o=XX] identifiers above with get_context for detailed info:",
+		"  get_context {\"id\": \"XX\"}",
+		"Example: If you see [o=ABC], use get_context {\"id\": \"ABC\"}",
+		"---",
+	}
 }
 
 // formatHeaderSection formats the LCF header with version, mode, tier, and token estimate
@@ -334,7 +364,8 @@ func (f *CompactFormatter) formatDetailedSmells(smells []CodeSmellEntry) []strin
 
 	lines := []string{"detailed_smells:"}
 	for _, smell := range smells {
-		lines = append(lines, fmt.Sprintf("  [%s] %s: %s (%s) oid=%s",
+		// Make object ID more prominent with [o=XX] format for visibility
+		lines = append(lines, fmt.Sprintf("  [%s] %s: %s (%s) [o=%s]",
 			smell.Severity, smell.Type, smell.Symbol, smell.Location, smell.ObjectID))
 	}
 	return lines
@@ -352,7 +383,8 @@ func (f *CompactFormatter) formatProblematicSymbols(symbols []ProblematicSymbol)
 		if len(ps.Tags) > 0 {
 			tagStr = " [" + strings.Join(ps.Tags, ",") + "]"
 		}
-		lines = append(lines, fmt.Sprintf("  %s (%s) risk=%d%s oid=%s",
+		// Make object ID more prominent with [o=XX] format for visibility
+		lines = append(lines, fmt.Sprintf("  %s (%s) risk=%d%s [o=%s]",
 			ps.Name, ps.Location, ps.RiskScore, tagStr, ps.ObjectID))
 	}
 	return lines
