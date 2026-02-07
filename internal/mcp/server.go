@@ -1840,6 +1840,154 @@ func (s *Server) registerTools() {
 		},
 	}, s.handleGitAnalysis)
 
+	// Index exploration tools - enumerate, filter, and inspect symbols without searching
+	s.server.AddTool(&mcp.Tool{
+		Name:        "list_symbols",
+		Description: "📋 Enumerate and filter symbols in the index. Like 'ls' for code: list all functions, types, methods with filtering by kind, file, complexity, params, exported status, and more. Use to discover what's in the codebase without searching. See 'info list_symbols'.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"kind": {
+					Type:        "string",
+					Description: "REQUIRED: Symbol kinds (comma-separated): func, type, struct, interface, method, class, enum, variable, constant, all. Aliases: fn, var, const, cls, iface",
+				},
+				"file": {
+					Type:        "string",
+					Description: "Glob pattern for file path filter (e.g., 'internal/mcp/*.go')",
+				},
+				"exported": {
+					Type:        "boolean",
+					Description: "true=exported only, false=unexported only, omit=all",
+				},
+				"name": {
+					Type:        "string",
+					Description: "Substring filter on symbol name (case-insensitive)",
+				},
+				"receiver": {
+					Type:        "string",
+					Description: "Filter methods by receiver type (e.g., 'Server')",
+				},
+				"min_complexity": {
+					Type:        "integer",
+					Description: "Minimum cyclomatic complexity",
+				},
+				"max_complexity": {
+					Type:        "integer",
+					Description: "Maximum cyclomatic complexity",
+				},
+				"min_params": {
+					Type:        "integer",
+					Description: "Minimum parameter count",
+				},
+				"max_params": {
+					Type:        "integer",
+					Description: "Maximum parameter count",
+				},
+				"flags": {
+					Type:        "string",
+					Description: "Comma-separated flags: async, variadic, generator, method",
+				},
+				"sort": {
+					Type:        "string",
+					Description: "Sort by: name (default), complexity, refs, line, params",
+				},
+				"max": {
+					Type:        "integer",
+					Description: "Max results (default: 50, max: 500)",
+				},
+				"offset": {
+					Type:        "integer",
+					Description: "Pagination offset",
+				},
+				"include": {
+					Type:        "string",
+					Description: "Comma-separated extras: signature, doc, refs, callers, callees, scope, ids, all. Default: signature,ids",
+				},
+			},
+			Required: []string{"kind"},
+		},
+	}, s.handleListSymbols)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "inspect_symbol",
+		Description: "🔎 Deep inspect a single symbol. Given a name or object ID, returns all metadata: signature, doc, complexity, callers, callees, type hierarchy, scope chain, flags. See 'info inspect_symbol'.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"name": {
+					Type:        "string",
+					Description: "Symbol name (exact match; may return multiple if ambiguous)",
+				},
+				"id": {
+					Type:        "string",
+					Description: "Object ID from search/list_symbols results",
+				},
+				"file": {
+					Type:        "string",
+					Description: "File path pattern to disambiguate",
+				},
+				"type": {
+					Type:        "string",
+					Description: "Symbol type to disambiguate (e.g., 'function', 'struct')",
+				},
+				"include": {
+					Type:        "string",
+					Description: "Sections: signature, doc, callers, callees, type_hierarchy, scope, refs, annotations, flags, all. Default: all",
+				},
+				"max_depth": {
+					Type:        "integer",
+					Description: "Max depth for hierarchy traversal (default: 3)",
+				},
+			},
+		},
+	}, s.handleInspectSymbol)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "browse_file",
+		Description: "📂 Browse all symbols in a file - the outline view. Shows the complete symbol table for a specific file with filtering, sorting, optional imports and stats. See 'info browse_file'.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"file": {
+					Type:        "string",
+					Description: "File path (exact, suffix, or glob match)",
+				},
+				"file_id": {
+					Type:        "integer",
+					Description: "File ID (alternative to path)",
+				},
+				"kind": {
+					Type:        "string",
+					Description: "Filter by symbol kinds (same as list_symbols)",
+				},
+				"exported": {
+					Type:        "boolean",
+					Description: "Visibility filter",
+				},
+				"sort": {
+					Type:        "string",
+					Description: "Sort by: line (default), name, type, complexity, refs",
+				},
+				"max": {
+					Type:        "integer",
+					Description: "Max symbols (default: 100)",
+				},
+				"include": {
+					Type:        "string",
+					Description: "Same as list_symbols. Default: signature,ids",
+				},
+				"show_imports": {
+					Type:        "boolean",
+					Description: "Include import list",
+				},
+				"show_stats": {
+					Type:        "boolean",
+					Description: "Include file-level statistics (symbol counts, avg complexity)",
+				},
+			},
+		},
+	}, s.handleBrowseFile)
+
 }
 
 // determineProjectRoot determines the project root path with proper fallback logic.

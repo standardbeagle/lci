@@ -9,14 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/standardbeagle/lci/internal/config"
+	"github.com/standardbeagle/lci/internal/core"
 	"github.com/standardbeagle/lci/internal/debug"
 	"github.com/standardbeagle/lci/internal/git"
+	"github.com/standardbeagle/lci/internal/idcodec"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/search"
+	"github.com/standardbeagle/lci/internal/searchtypes"
 	"github.com/standardbeagle/lci/internal/types"
 	"github.com/standardbeagle/lci/internal/version"
 )
@@ -201,6 +205,9 @@ func (s *IndexServer) registerHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/references", s.handleReferences)
 	mux.HandleFunc("/tree", s.handleTree)
 	mux.HandleFunc("/git-analyze", s.handleGitAnalyze)
+	mux.HandleFunc("/list-symbols", s.handleListSymbols)
+	mux.HandleFunc("/inspect-symbol", s.handleInspectSymbol)
+	mux.HandleFunc("/browse-file", s.handleBrowseFile)
 }
 
 // handleStatus returns the current index status
@@ -725,4 +732,511 @@ func (s *IndexServer) handleGitAnalyze(w http.ResponseWriter, r *http.Request) {
 	response := GitAnalyzeResponse{Report: report}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleListSymbols enumerates and filters symbols in the index
+func (s *IndexServer) handleListSymbols(w http.ResponseWriter, r *http.Request) {
+	var req ListSymbolsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Delegate to the indexer's symbol enumeration
+	allFileIDs := s.indexer.GetAllFileIDsFiltered()
+	kinds := parseHTTPSymbolKinds(req.Kind)
+	maxResults := req.Max
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+	if maxResults > 500 {
+		maxResults = 500
+	}
+
+	tracker := s.indexer.GetRefTracker()
+
+	var allEntries []ListSymbolsEntry
+	for _, fileID := range allFileIDs {
+		filePath := s.indexer.GetFilePath(fileID)
+		if filePath == "" {
+			continue
+		}
+		if req.File != "" {
+			matched, _ := filepath.Match(req.File, filePath)
+			if !matched {
+				matched, _ = filepath.Match(req.File, filepath.Base(filePath))
+			}
+			if !matched {
+				continue
+			}
+		}
+		symbols := s.indexer.GetFileEnhancedSymbols(fileID)
+		for _, sym := range symbols {
+			if !matchesHTTPListFilters(sym, kinds, req) {
+				continue
+			}
+			entry := buildHTTPSymbolEntry(sym, filePath, tracker)
+			allEntries = append(allEntries, entry)
+		}
+	}
+
+	total := len(allEntries)
+
+	// Apply offset/limit
+	if req.Offset > 0 && req.Offset < len(allEntries) {
+		allEntries = allEntries[req.Offset:]
+	} else if req.Offset >= len(allEntries) {
+		allEntries = nil
+	}
+	if len(allEntries) > maxResults {
+		allEntries = allEntries[:maxResults]
+	}
+
+	resp := ListSymbolsHTTPResponse{
+		Symbols: allEntries,
+		Total:   total,
+		Showing: len(allEntries),
+		HasMore: total > req.Offset+len(allEntries),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleInspectSymbol provides deep inspection of a symbol
+func (s *IndexServer) handleInspectSymbol(w http.ResponseWriter, r *http.Request) {
+	var req InspectSymbolRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	var matched []*types.EnhancedSymbol
+
+	if req.ID != "" {
+		symbolID, err := idcodec.DecodeSymbolID(req.ID)
+		if err == nil {
+			tracker := s.indexer.GetRefTracker()
+			if tracker != nil {
+				if sym := tracker.GetEnhancedSymbol(symbolID); sym != nil {
+					matched = append(matched, sym)
+				}
+			}
+		}
+	}
+
+	if req.Name != "" && len(matched) == 0 {
+		matched = s.indexer.FindSymbolsByName(req.Name)
+	}
+
+	// Apply disambiguators
+	if req.File != "" || req.Type != "" {
+		filtered := matched[:0]
+		for _, sym := range matched {
+			filePath := s.indexer.GetFilePath(sym.FileID)
+			if req.File != "" {
+				m, _ := filepath.Match(req.File, filePath)
+				if !m {
+					m, _ = filepath.Match(req.File, filepath.Base(filePath))
+				}
+				if !m {
+					continue
+				}
+			}
+			if req.Type != "" {
+				expectedKinds := parseHTTPSymbolKinds(req.Type)
+				if expectedKinds != nil && !expectedKinds[sym.Symbol.Type] {
+					continue
+				}
+			}
+			filtered = append(filtered, sym)
+		}
+		matched = filtered
+	}
+
+	tracker := s.indexer.GetRefTracker()
+	results := make([]InspectSymbolEntry, len(matched))
+	for i, sym := range matched {
+		results[i] = buildHTTPInspectEntry(sym, s.indexer.GetFilePath(sym.FileID), tracker, s.indexer)
+	}
+
+	resp := InspectSymbolHTTPResponse{
+		Symbols: results,
+		Count:   len(results),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleBrowseFile lists all symbols in a specific file
+func (s *IndexServer) handleBrowseFile(w http.ResponseWriter, r *http.Request) {
+	var req BrowseFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Find the target file
+	var targetFileID types.FileID
+	var targetFilePath string
+	found := false
+
+	if req.FileID != nil {
+		targetFileID = types.FileID(*req.FileID)
+		targetFilePath = s.indexer.GetFilePath(targetFileID)
+		if targetFilePath != "" {
+			found = true
+		}
+	}
+
+	if !found && req.File != "" {
+		allFileIDs := s.indexer.GetAllFileIDsFiltered()
+		for _, fid := range allFileIDs {
+			fp := s.indexer.GetFilePath(fid)
+			if fp == "" {
+				continue
+			}
+			if fp == req.File || strings.HasSuffix(fp, "/"+req.File) || strings.HasSuffix(fp, "\\"+req.File) {
+				targetFileID = fid
+				targetFilePath = fp
+				found = true
+				break
+			}
+			if m, _ := filepath.Match(req.File, fp); m {
+				targetFileID = fid
+				targetFilePath = fp
+				found = true
+				break
+			}
+		}
+	}
+
+	if !found {
+		resp := BrowseFileHTTPResponse{Error: fmt.Sprintf("file not found: %s", req.File)}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	kinds := parseHTTPSymbolKinds(req.Kind)
+	tracker := s.indexer.GetRefTracker()
+	maxResults := req.Max
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	symbols := s.indexer.GetFileEnhancedSymbols(targetFileID)
+	var entries []ListSymbolsEntry
+	for _, sym := range symbols {
+		if kinds != nil && !kinds[sym.Symbol.Type] {
+			continue
+		}
+		if req.Exported != nil {
+			if *req.Exported && !sym.IsExported {
+				continue
+			}
+			if !*req.Exported && sym.IsExported {
+				continue
+			}
+		}
+		entries = append(entries, buildHTTPSymbolEntry(sym, targetFilePath, tracker))
+	}
+
+	total := len(entries)
+	if len(entries) > maxResults {
+		entries = entries[:maxResults]
+	}
+
+	// Detect language
+	lang := httpLanguageFromPath(targetFilePath)
+
+	resp := BrowseFileHTTPResponse{
+		File: BrowseFileInfoEntry{
+			Path:     targetFilePath,
+			FileID:   int(targetFileID),
+			Language: lang,
+		},
+		Symbols: entries,
+		Total:   total,
+	}
+
+	if req.ShowImports {
+		fileInfo := s.indexer.GetFile(targetFileID)
+		if fileInfo != nil {
+			imports := make([]string, len(fileInfo.Imports))
+			for i, imp := range fileInfo.Imports {
+				imports[i] = imp.Path
+			}
+			resp.Imports = imports
+		}
+	}
+
+	if req.ShowStats {
+		stats := computeHTTPFileStats(symbols)
+		resp.Stats = stats
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// ========== HTTP helpers ==========
+
+func parseHTTPSymbolKinds(kindStr string) map[types.SymbolType]bool {
+	if kindStr == "" || kindStr == "all" {
+		return nil
+	}
+	kinds := make(map[types.SymbolType]bool)
+	for _, k := range strings.Split(kindStr, ",") {
+		k = strings.TrimSpace(strings.ToLower(k))
+		switch k {
+		case "func", "fn", "function":
+			kinds[types.SymbolTypeFunction] = true
+		case "type":
+			kinds[types.SymbolTypeType] = true
+		case "struct":
+			kinds[types.SymbolTypeStruct] = true
+		case "interface", "iface":
+			kinds[types.SymbolTypeInterface] = true
+		case "method":
+			kinds[types.SymbolTypeMethod] = true
+		case "class", "cls":
+			kinds[types.SymbolTypeClass] = true
+		case "enum":
+			kinds[types.SymbolTypeEnum] = true
+		case "variable", "var":
+			kinds[types.SymbolTypeVariable] = true
+		case "constant", "const":
+			kinds[types.SymbolTypeConstant] = true
+		case "field":
+			kinds[types.SymbolTypeField] = true
+		}
+	}
+	if len(kinds) == 0 {
+		return nil
+	}
+	return kinds
+}
+
+func matchesHTTPListFilters(sym *types.EnhancedSymbol, kinds map[types.SymbolType]bool, req ListSymbolsRequest) bool {
+	if kinds != nil && !kinds[sym.Symbol.Type] {
+		return false
+	}
+	if req.Exported != nil {
+		if *req.Exported && !sym.IsExported {
+			return false
+		}
+		if !*req.Exported && sym.IsExported {
+			return false
+		}
+	}
+	if req.Name != "" && !strings.Contains(strings.ToLower(sym.Symbol.Name), strings.ToLower(req.Name)) {
+		return false
+	}
+	if req.Receiver != "" && !strings.EqualFold(sym.ReceiverType, req.Receiver) {
+		return false
+	}
+	if req.MinComplexity != nil && sym.Complexity < *req.MinComplexity {
+		return false
+	}
+	if req.MaxComplexity != nil && sym.Complexity > *req.MaxComplexity {
+		return false
+	}
+	if req.MinParams != nil && int(sym.ParameterCount) < *req.MinParams {
+		return false
+	}
+	if req.MaxParams != nil && int(sym.ParameterCount) > *req.MaxParams {
+		return false
+	}
+	return true
+}
+
+func buildHTTPSymbolEntry(sym *types.EnhancedSymbol, filePath string, tracker *core.ReferenceTracker) ListSymbolsEntry {
+	entry := ListSymbolsEntry{
+		Name:           sym.Symbol.Name,
+		Type:           sym.Symbol.Type.String(),
+		File:           filePath,
+		Line:           sym.Symbol.Line,
+		ObjectID:       searchtypes.EncodeSymbolID(sym.ID),
+		IsExported:     sym.IsExported,
+		Signature:      sym.Signature,
+		Complexity:     sym.Complexity,
+		ParameterCount: int(sym.ParameterCount),
+		ReceiverType:   sym.ReceiverType,
+		IncomingRefs:   len(sym.IncomingRefs),
+		OutgoingRefs:   len(sym.OutgoingRefs),
+	}
+	return entry
+}
+
+func buildHTTPInspectEntry(sym *types.EnhancedSymbol, filePath string, tracker *core.ReferenceTracker, indexer *indexing.MasterIndex) InspectSymbolEntry {
+	entry := InspectSymbolEntry{
+		Name:           sym.Symbol.Name,
+		ObjectID:       searchtypes.EncodeSymbolID(sym.ID),
+		Type:           sym.Symbol.Type.String(),
+		File:           filePath,
+		Line:           sym.Symbol.Line,
+		IsExported:     sym.IsExported,
+		Signature:      sym.Signature,
+		DocComment:     sym.DocComment,
+		Complexity:     sym.Complexity,
+		ParameterCount: int(sym.ParameterCount),
+		ReceiverType:   sym.ReceiverType,
+		IncomingRefs:   len(sym.IncomingRefs),
+		OutgoingRefs:   len(sym.OutgoingRefs),
+		Annotations:    sym.Annotations,
+	}
+
+	if tracker != nil {
+		entry.Callers = tracker.GetCallerNames(sym.ID)
+		entry.Callees = tracker.GetCalleeNames(sym.ID)
+
+		rels := tracker.GetTypeRelationships(sym.ID)
+		if rels != nil && rels.HasTypeRelationships() {
+			th := &TypeHierarchyEntry{}
+			for _, id := range rels.Implements {
+				if s := tracker.GetEnhancedSymbol(id); s != nil {
+					th.Implements = append(th.Implements, s.Symbol.Name)
+				}
+			}
+			for _, id := range rels.ImplementedBy {
+				if s := tracker.GetEnhancedSymbol(id); s != nil {
+					th.ImplementedBy = append(th.ImplementedBy, s.Symbol.Name)
+				}
+			}
+			for _, id := range rels.Extends {
+				if s := tracker.GetEnhancedSymbol(id); s != nil {
+					th.Extends = append(th.Extends, s.Symbol.Name)
+				}
+			}
+			for _, id := range rels.ExtendedBy {
+				if s := tracker.GetEnhancedSymbol(id); s != nil {
+					th.ExtendedBy = append(th.ExtendedBy, s.Symbol.Name)
+				}
+			}
+			entry.TypeHierarchy = th
+		}
+	}
+
+	if len(sym.ScopeChain) > 0 {
+		chain := make([]string, len(sym.ScopeChain))
+		for i, sc := range sym.ScopeChain {
+			chain[i] = sc.Name
+		}
+		entry.ScopeChain = chain
+	}
+
+	// Decode flags
+	if sym.FunctionFlags != 0 {
+		var flags []string
+		if sym.FunctionFlags&types.FunctionFlagAsync != 0 {
+			flags = append(flags, "async")
+		}
+		if sym.FunctionFlags&types.FunctionFlagGenerator != 0 {
+			flags = append(flags, "generator")
+		}
+		if sym.FunctionFlags&types.FunctionFlagMethod != 0 {
+			flags = append(flags, "method")
+		}
+		if sym.FunctionFlags&types.FunctionFlagVariadic != 0 {
+			flags = append(flags, "variadic")
+		}
+		entry.FunctionFlags = flags
+	}
+	if sym.VariableFlags != 0 {
+		var flags []string
+		if sym.VariableFlags&types.VariableFlagConst != 0 {
+			flags = append(flags, "const")
+		}
+		if sym.VariableFlags&types.VariableFlagStatic != 0 {
+			flags = append(flags, "static")
+		}
+		if sym.VariableFlags&types.VariableFlagPointer != 0 {
+			flags = append(flags, "pointer")
+		}
+		entry.VariableFlags = flags
+	}
+
+	return entry
+}
+
+func computeHTTPFileStats(symbols []*types.EnhancedSymbol) *FileStatsEntry {
+	stats := &FileStatsEntry{
+		SymbolCount: len(symbols),
+	}
+	totalComplexity := 0
+	complexityCount := 0
+	for _, sym := range symbols {
+		if sym.IsExported {
+			stats.ExportedCount++
+		}
+		switch sym.Symbol.Type {
+		case types.SymbolTypeFunction, types.SymbolTypeMethod:
+			stats.FunctionCount++
+			if sym.Complexity > 0 {
+				totalComplexity += sym.Complexity
+				complexityCount++
+				if sym.Complexity > stats.MaxComplexity {
+					stats.MaxComplexity = sym.Complexity
+				}
+			}
+		case types.SymbolTypeType, types.SymbolTypeStruct, types.SymbolTypeInterface,
+			types.SymbolTypeClass, types.SymbolTypeEnum:
+			stats.TypeCount++
+		}
+	}
+	if complexityCount > 0 {
+		stats.AvgComplexity = float64(totalComplexity) / float64(complexityCount)
+	}
+	return stats
+}
+
+func httpLanguageFromPath(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".js":
+		return "javascript"
+	case ".ts":
+		return "typescript"
+	case ".py":
+		return "python"
+	case ".rs":
+		return "rust"
+	case ".java":
+		return "java"
+	case ".cs":
+		return "csharp"
+	default:
+		return ""
+	}
 }

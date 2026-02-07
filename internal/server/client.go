@@ -451,3 +451,93 @@ func (c *Client) GitAnalyze(req GitAnalyzeRequest) (interface{}, error) {
 
 	return gitResp.Report, nil
 }
+
+// ListSymbols enumerates and filters symbols in the index
+func (c *Client) ListSymbols(req ListSymbolsRequest) (*ListSymbolsHTTPResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/list-symbols", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list symbols: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var result ListSymbolsHTTPResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if result.Error != "" {
+		return nil, fmt.Errorf("list symbols error: %s", result.Error)
+	}
+
+	return &result, nil
+}
+
+// InspectSymbol provides deep inspection of a symbol
+func (c *Client) InspectSymbol(req InspectSymbolRequest) (*InspectSymbolHTTPResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/inspect-symbol", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect symbol: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var result InspectSymbolHTTPResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if result.Error != "" {
+		return nil, fmt.Errorf("inspect symbol error: %s", result.Error)
+	}
+
+	return &result, nil
+}
+
+// BrowseFile lists all symbols in a specific file
+func (c *Client) BrowseFile(req BrowseFileRequest) (*BrowseFileHTTPResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post("http://unix/browse-file", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to browse file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server error: %s", string(body))
+	}
+
+	var result BrowseFileHTTPResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if result.Error != "" {
+		return nil, fmt.Errorf("browse file error: %s", result.Error)
+	}
+
+	return &result, nil
+}

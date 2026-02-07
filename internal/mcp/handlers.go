@@ -743,6 +743,115 @@ func (s *Server) handleInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 			},
 		})
 
+	case "list_symbols":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "list_symbols",
+			"description": "Enumerate and filter symbols in the index. Like 'ls' for code - list all functions, types, methods with rich filtering.",
+			"what_it_does": []string{
+				"List all symbols of a given kind (func, type, struct, etc.)",
+				"Filter by file path, name, receiver, complexity, param count",
+				"Sort by name, complexity, reference count, line, params",
+				"Paginate through large result sets",
+				"Include optional extras: signature, doc, refs, callers, callees, scope",
+			},
+			"parameters": map[string]string{
+				"kind":           "REQUIRED: Symbol kinds (comma-separated): func, type, struct, interface, method, class, enum, variable, constant, all. Aliases: fn, var, const, cls, iface",
+				"file":           "Glob pattern for file path filter (e.g., 'internal/mcp/*.go')",
+				"exported":       "true=exported only, false=unexported only, omit=all",
+				"name":           "Substring filter on symbol name (case-insensitive)",
+				"receiver":       "Filter methods by receiver type (e.g., 'Server')",
+				"min_complexity": "Minimum cyclomatic complexity",
+				"max_complexity": "Maximum cyclomatic complexity",
+				"min_params":     "Minimum parameter count",
+				"max_params":     "Maximum parameter count",
+				"flags":          "Comma-separated: async, variadic, generator, method",
+				"sort":           "Sort by: name (default), complexity, refs, line, params",
+				"max":            "Max results (default: 50, max: 500)",
+				"offset":         "Pagination offset",
+				"include":        "Comma-separated extras: signature, doc, refs, callers, callees, scope, ids, all. Default: signature,ids",
+			},
+			"examples": map[string]interface{}{
+				"all_functions":    `{"kind": "func"}`,
+				"exported_types":   `{"kind": "type,struct,interface", "exported": true}`,
+				"complex_funcs":    `{"kind": "func", "min_complexity": 10, "sort": "complexity"}`,
+				"methods_on_type":  `{"kind": "method", "receiver": "Server"}`,
+				"by_file":          `{"kind": "all", "file": "internal/mcp/*.go"}`,
+				"with_callers":     `{"kind": "func", "include": "signature,callers,callees", "max": 20}`,
+				"paginated":        `{"kind": "func", "max": 50, "offset": 50}`,
+				"variadic_funcs":   `{"kind": "func", "flags": "variadic"}`,
+				"name_filter":      `{"kind": "func", "name": "handle"}`,
+			},
+			"performance": "<50ms typical for full index scan",
+		})
+
+	case "inspect_symbol":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "inspect_symbol",
+			"description": "Deep inspect a single symbol. Returns all metadata: signature, doc, complexity, callers, callees, type hierarchy, scope chain, flags.",
+			"what_it_does": []string{
+				"Look up a symbol by name or object ID",
+				"Returns complete metadata including signature, doc comment",
+				"Shows callers and callees from the call graph",
+				"Displays type hierarchy (implements, extends)",
+				"Includes scope chain, annotations, and function/variable flags",
+			},
+			"parameters": map[string]string{
+				"name":      "Symbol name (exact match; may return multiple if ambiguous)",
+				"id":        "Object ID from search/list_symbols results",
+				"file":      "File path pattern to disambiguate",
+				"type":      "Symbol type to disambiguate (e.g., 'function', 'struct')",
+				"include":   "Sections: signature, doc, callers, callees, type_hierarchy, scope, refs, annotations, flags, all. Default: all",
+				"max_depth": "Max depth for hierarchy traversal (default: 3)",
+			},
+			"examples": map[string]interface{}{
+				"by_name":       `{"name": "handleSearch"}`,
+				"by_id":         `{"id": "VE"}`,
+				"disambiguated": `{"name": "Server", "type": "struct", "file": "internal/mcp/*.go"}`,
+				"callers_only":  `{"name": "handleSearch", "include": "callers,callees"}`,
+				"full_inspect":  `{"name": "handleSearch", "include": "all"}`,
+			},
+			"workflow": []string{
+				"1. Use list_symbols to find symbols: {\"kind\": \"func\", \"name\": \"handle\"}",
+				"2. Get object_id from results",
+				"3. Deep inspect: {\"id\": \"VE\", \"include\": \"all\"}",
+			},
+			"performance": "<5ms typical",
+		})
+
+	case "browse_file":
+		return createJSONResponse(map[string]interface{}{
+			"name":        "browse_file",
+			"description": "Browse all symbols in a file - the outline view. Shows the complete symbol table for a specific file.",
+			"what_it_does": []string{
+				"Show all symbols defined in a file",
+				"Filter by kind (functions, types, etc.) and exported status",
+				"Sort by line, name, type, complexity, or reference count",
+				"Optionally include import list and file-level statistics",
+				"Works with exact paths, suffix matching, or glob patterns",
+			},
+			"parameters": map[string]string{
+				"file":         "File path (exact, suffix, or glob match)",
+				"file_id":      "File ID (alternative to path)",
+				"kind":         "Filter by symbol kinds (same as list_symbols)",
+				"exported":     "Visibility filter",
+				"sort":         "Sort by: line (default), name, type, complexity, refs",
+				"max":          "Max symbols (default: 100)",
+				"include":      "Same as list_symbols. Default: signature,ids",
+				"show_imports": "Include import list",
+				"show_stats":   "Include file-level statistics (symbol counts, avg complexity)",
+			},
+			"examples": map[string]interface{}{
+				"basic":            `{"file": "internal/mcp/server.go"}`,
+				"suffix_match":     `{"file": "server.go"}`,
+				"functions_only":   `{"file": "internal/mcp/server.go", "kind": "func,method"}`,
+				"exported_only":    `{"file": "internal/mcp/server.go", "exported": true}`,
+				"with_stats":       `{"file": "internal/mcp/server.go", "show_imports": true, "show_stats": true}`,
+				"sort_complexity":  `{"file": "internal/mcp/server.go", "kind": "func", "sort": "complexity"}`,
+				"by_file_id":       `{"file_id": 42}`,
+			},
+			"performance": "<10ms typical",
+		})
+
 	default:
 		// Generic info about all tools
 		return createJSONResponse(map[string]interface{}{
@@ -753,6 +862,9 @@ func (s *Server) handleInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp
 				"files - file/path search with fuzzy matching",
 				"get_context - detailed context for results",
 				"context - save/load code manifests with callees+purity",
+				"list_symbols - enumerate and filter symbols (the 'ls' for code)",
+				"inspect_symbol - deep inspect a single symbol",
+				"browse_file - file outline view with all symbols",
 				"semantic_annotations - find code by semantic tags",
 				"code_insight - comprehensive codebase analysis (includes git analysis modes)",
 				"side_effects - query function purity and side effects",

@@ -649,6 +649,148 @@ Examples:
 				Action: gitAnalyzeCommand,
 			},
 			{
+				Name:    "symbols",
+				Aliases: []string{"sym"},
+				Usage:   "List and filter symbols in the index",
+				Description: `Enumerate symbols with rich filtering. Like 'ls' for code.
+
+Examples:
+  lci symbols --kind func                      # All functions
+  lci symbols --kind func --exported           # Exported functions only
+  lci symbols --kind method --receiver Server  # Methods on Server type
+  lci symbols --kind func --min-complexity 10  # Complex functions
+  lci symbols --kind all --file "*.go"         # All symbols in Go files`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "kind",
+						Aliases: []string{"k"},
+						Usage:   "Symbol kinds: func, type, struct, interface, method, class, enum, variable, constant, all",
+						Value:   "all",
+					},
+					&cli.BoolFlag{
+						Name:  "exported",
+						Usage: "Show only exported symbols",
+					},
+					&cli.StringFlag{
+						Name:    "file",
+						Aliases: []string{"f"},
+						Usage:   "Glob pattern for file path filter",
+					},
+					&cli.StringFlag{
+						Name:    "name",
+						Aliases: []string{"n"},
+						Usage:   "Substring filter on symbol name",
+					},
+					&cli.StringFlag{
+						Name:  "receiver",
+						Usage: "Filter methods by receiver type",
+					},
+					&cli.IntFlag{
+						Name:  "min-complexity",
+						Usage: "Minimum cyclomatic complexity",
+					},
+					&cli.IntFlag{
+						Name:  "max-complexity",
+						Usage: "Maximum cyclomatic complexity",
+					},
+					&cli.StringFlag{
+						Name:    "sort",
+						Aliases: []string{"s"},
+						Usage:   "Sort by: name, complexity, refs, line, params",
+						Value:   "name",
+					},
+					&cli.IntFlag{
+						Name:    "max",
+						Aliases: []string{"m"},
+						Usage:   "Maximum results",
+						Value:   50,
+					},
+					&cli.BoolFlag{
+						Name:    "json",
+						Aliases: []string{"j"},
+						Usage:   "Output as JSON",
+					},
+				},
+				Action: symbolsCommand,
+			},
+			{
+				Name:    "inspect",
+				Aliases: []string{"insp"},
+				Usage:   "Deep inspect a symbol by name or ID",
+				Description: `Returns all metadata for a symbol: signature, doc, complexity,
+callers, callees, type hierarchy, scope chain, and flags.
+
+Examples:
+  lci inspect handleSearch                    # Inspect by name
+  lci inspect --type func handleSearch        # Disambiguate by type
+  lci inspect --file "*.go" Server            # Disambiguate by file`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "type",
+						Usage: "Symbol type to disambiguate (e.g., function, struct)",
+					},
+					&cli.StringFlag{
+						Name:    "file",
+						Aliases: []string{"f"},
+						Usage:   "File path pattern to disambiguate",
+					},
+					&cli.StringFlag{
+						Name:  "include",
+						Usage: "Sections to include (comma-separated): signature, doc, callers, callees, type_hierarchy, scope, refs, annotations, flags, all",
+						Value: "all",
+					},
+					&cli.BoolFlag{
+						Name:    "json",
+						Aliases: []string{"j"},
+						Usage:   "Output as JSON",
+					},
+				},
+				Action: inspectCommand,
+			},
+			{
+				Name:    "browse",
+				Aliases: []string{"br"},
+				Usage:   "Browse all symbols in a file (outline view)",
+				Description: `Show the complete symbol table for a specific file.
+
+Examples:
+  lci browse internal/mcp/server.go           # Browse file symbols
+  lci browse server.go                        # Suffix match
+  lci browse server.go --kind func            # Functions only
+  lci browse server.go --exported --stats     # Exported with stats`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "kind",
+						Aliases: []string{"k"},
+						Usage:   "Filter by symbol kinds",
+					},
+					&cli.BoolFlag{
+						Name:  "exported",
+						Usage: "Show only exported symbols",
+					},
+					&cli.StringFlag{
+						Name:    "sort",
+						Aliases: []string{"s"},
+						Usage:   "Sort by: line, name, type, complexity, refs",
+						Value:   "line",
+					},
+					&cli.BoolFlag{
+						Name:  "imports",
+						Usage: "Show import list",
+					},
+					&cli.BoolFlag{
+						Name:  "stats",
+						Usage: "Show file-level statistics",
+					},
+					&cli.BoolFlag{
+						Name:    "json",
+						Aliases: []string{"j"},
+						Usage:   "Output as JSON",
+					},
+				},
+				Action: browseCommand,
+			},
+			{
 				Name:    "server",
 				Usage:   "Start persistent index server (shared between CLI and MCP)",
 				Aliases: []string{"srv"},
@@ -1856,6 +1998,240 @@ func outputGitAnalyzeText(report *git.AnalysisReport) error {
 		report.Metadata.BaseRef,
 		report.Metadata.TargetRef,
 		report.Metadata.AnalysisTimeMs)
+
+	return nil
+}
+
+func symbolsCommand(c *cli.Context) error {
+	kind := c.String("kind")
+	jsonOutput := c.Bool("json")
+
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
+	req := server.ListSymbolsRequest{
+		Kind:     kind,
+		File:     c.String("file"),
+		Name:     c.String("name"),
+		Receiver: c.String("receiver"),
+		Sort:     c.String("sort"),
+		Max:      c.Int("max"),
+	}
+
+	if c.Bool("exported") {
+		exported := true
+		req.Exported = &exported
+	}
+	if c.IsSet("min-complexity") {
+		v := c.Int("min-complexity")
+		req.MinComplexity = &v
+	}
+	if c.IsSet("max-complexity") {
+		v := c.Int("max-complexity")
+		req.MaxComplexity = &v
+	}
+
+	result, err := client.ListSymbols(req)
+	if err != nil {
+		return fmt.Errorf("list symbols failed: %w", err)
+	}
+
+	if jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+
+	// Text output
+	for _, sym := range result.Symbols {
+		sig := sym.Signature
+		if sig == "" {
+			sig = sym.Name
+		}
+		exported := ""
+		if sym.IsExported {
+			exported = " [exported]"
+		}
+		complexity := ""
+		if sym.Complexity > 0 {
+			complexity = fmt.Sprintf(" (complexity:%d)", sym.Complexity)
+		}
+		fmt.Printf("%s:%d: %s %s%s%s\n", sym.File, sym.Line, sym.Type, sig, exported, complexity)
+	}
+
+	if result.HasMore {
+		fmt.Fprintf(os.Stderr, "\n(%d of %d shown, use --max to see more)\n", result.Showing, result.Total)
+	}
+
+	return nil
+}
+
+func inspectCommand(c *cli.Context) error {
+	if c.NArg() < 1 {
+		return errors.New("usage: lci inspect <name>")
+	}
+
+	name := c.Args().First()
+	jsonOutput := c.Bool("json")
+
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
+	req := server.InspectSymbolRequest{
+		Name:    name,
+		File:    c.String("file"),
+		Type:    c.String("type"),
+		Include: c.String("include"),
+	}
+
+	result, err := client.InspectSymbol(req)
+	if err != nil {
+		return fmt.Errorf("inspect failed: %w", err)
+	}
+
+	if jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+
+	// Text output
+	for i, sym := range result.Symbols {
+		if i > 0 {
+			fmt.Println("---")
+		}
+		fmt.Printf("%s (%s) %s:%d\n", sym.Name, sym.Type, sym.File, sym.Line)
+		if sym.Signature != "" {
+			fmt.Printf("  Signature: %s\n", sym.Signature)
+		}
+		if sym.DocComment != "" {
+			fmt.Printf("  Doc: %s\n", sym.DocComment)
+		}
+		if sym.Complexity > 0 {
+			fmt.Printf("  Complexity: %d\n", sym.Complexity)
+		}
+		if sym.ReceiverType != "" {
+			fmt.Printf("  Receiver: %s\n", sym.ReceiverType)
+		}
+		if len(sym.Callers) > 0 {
+			fmt.Printf("  Callers: %s\n", strings.Join(sym.Callers, ", "))
+		}
+		if len(sym.Callees) > 0 {
+			fmt.Printf("  Callees: %s\n", strings.Join(sym.Callees, ", "))
+		}
+		if sym.TypeHierarchy != nil {
+			if len(sym.TypeHierarchy.Implements) > 0 {
+				fmt.Printf("  Implements: %s\n", strings.Join(sym.TypeHierarchy.Implements, ", "))
+			}
+			if len(sym.TypeHierarchy.ImplementedBy) > 0 {
+				fmt.Printf("  Implemented by: %s\n", strings.Join(sym.TypeHierarchy.ImplementedBy, ", "))
+			}
+		}
+		if len(sym.ScopeChain) > 0 {
+			fmt.Printf("  Scope: %s\n", strings.Join(sym.ScopeChain, " > "))
+		}
+		if len(sym.Annotations) > 0 {
+			fmt.Printf("  Annotations: %s\n", strings.Join(sym.Annotations, ", "))
+		}
+		fmt.Printf("  Refs: %d incoming, %d outgoing\n", sym.IncomingRefs, sym.OutgoingRefs)
+	}
+
+	return nil
+}
+
+func browseCommand(c *cli.Context) error {
+	if c.NArg() < 1 {
+		return errors.New("usage: lci browse <file_path>")
+	}
+
+	filePath := c.Args().First()
+	jsonOutput := c.Bool("json")
+
+	cfg, err := loadConfigWithOverrides(c)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	client, err := ensureServerRunning(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to index server: %w", err)
+	}
+
+	req := server.BrowseFileRequest{
+		File:        filePath,
+		Kind:        c.String("kind"),
+		Sort:        c.String("sort"),
+		ShowImports: c.Bool("imports"),
+		ShowStats:   c.Bool("stats"),
+	}
+
+	if c.Bool("exported") {
+		exported := true
+		req.Exported = &exported
+	}
+
+	result, err := client.BrowseFile(req)
+	if err != nil {
+		return fmt.Errorf("browse failed: %w", err)
+	}
+
+	if jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+
+	// Text output
+	fmt.Printf("File: %s", result.File.Path)
+	if result.File.Language != "" {
+		fmt.Printf(" (%s)", result.File.Language)
+	}
+	fmt.Println()
+
+	if result.Stats != nil {
+		fmt.Printf("Stats: %d symbols (%d functions, %d types, %d exported)",
+			result.Stats.SymbolCount, result.Stats.FunctionCount,
+			result.Stats.TypeCount, result.Stats.ExportedCount)
+		if result.Stats.AvgComplexity > 0 {
+			fmt.Printf(", avg complexity: %.1f, max: %d",
+				result.Stats.AvgComplexity, result.Stats.MaxComplexity)
+		}
+		fmt.Println()
+	}
+
+	if len(result.Imports) > 0 {
+		fmt.Println("\nImports:")
+		for _, imp := range result.Imports {
+			fmt.Printf("  %s\n", imp)
+		}
+	}
+
+	fmt.Printf("\nSymbols (%d):\n", result.Total)
+	for _, sym := range result.Symbols {
+		sig := sym.Signature
+		if sig == "" {
+			sig = sym.Name
+		}
+		exported := ""
+		if sym.IsExported {
+			exported = " [exported]"
+		}
+		fmt.Printf("  %4d: %-10s %s%s\n", sym.Line, sym.Type, sig, exported)
+	}
 
 	return nil
 }
