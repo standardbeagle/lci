@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	nethttppprof "net/http/pprof"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -1086,67 +1086,73 @@ func (s *Server) checkIndexAvailability() (bool, error) {
 		return false, errors.New("index not initialized - server may be starting up. Try: 1) Check that you're in a project directory with source code, 2) Wait for auto-indexing to complete (check index_stats)")
 	}
 
-	// Check initial indexing state
+	// Check initial indexing state from server's synced copy
 	s.indexingMutex.RLock()
 	status := s.indexingState.Status
 	errorMsg := s.indexingState.ErrorMessage
 	s.indexingMutex.RUnlock()
 
-	// Handle failed state immediately
-	if status == "failed" {
+	// Also check the autoIndexManager directly as the authoritative source.
+	// The server's indexingState may lag behind the manager due to goroutine
+	// scheduling (e.g., status is "idle" but manager is already running).
+	if s.autoIndexManager != nil && s.autoIndexManager.isRunning() {
+		managerStatus := s.autoIndexManager.getStatus()
+		if managerStatus != status {
+			s.diagnosticLogger.Printf("Status mismatch: server=%q, manager=%q; using manager status", status, managerStatus)
+			status = managerStatus
+		}
+	}
+
+	// Handle terminal states immediately
+	switch status {
+	case "failed":
 		return false, fmt.Errorf("indexing failed: %s. Troubleshooting: 1) Check file permissions in project directory, 2) Verify .lci.kdl configuration is valid, 3) Ensure project contains supported file types (.go, .js, .ts, .py, .rs, .java), 4) Check diagnostic logs for details", errorMsg)
-	}
 
-	// If no indexing has been done yet, return immediately (auto-indexing will start)
-	if status == "idle" {
-		s.diagnosticLogger.Printf("Index is idle, background indexing will start automatically")
+	case "completed":
+		return true, nil
+
+	case "cancelled":
+		return true, nil // Index may be partial but is queryable
+
+	case "idle":
+		// Genuinely idle - no indexing in progress or needed (e.g., not a project root)
 		return true, nil
 	}
 
-	// If indexing is complete, return immediately
-	if status == "completed" {
+	// Any in-progress status (estimating, waiting, indexing) - wait for completion
+	if s.autoIndexManager == nil {
+		return false, errors.New("indexing in progress but auto-index manager unavailable")
+	}
+
+	// Determine timeout from config or use default
+	timeoutSeconds := DefaultIndexingTimeout
+	if s.cfg != nil && s.cfg.Performance.IndexingTimeoutSec > 0 {
+		timeoutSeconds = s.cfg.Performance.IndexingTimeoutSec
+	}
+	timeout := time.Duration(timeoutSeconds) * time.Second
+
+	s.diagnosticLogger.Printf("Indexing in progress (status=%q), waiting up to %v for completion", status, timeout)
+
+	// Wait for completion using channel-based signaling (no polling)
+	finalStatus, err := s.autoIndexManager.waitForCompletion(timeout)
+	if err != nil {
+		return false, fmt.Errorf("indexing timeout after %v - codebase indexing is taking longer than expected. For large projects, check index_stats for progress", timeout)
+	}
+
+	// Check final status after waiting
+	if finalStatus == "failed" {
+		s.indexingMutex.RLock()
+		errorMsg = s.indexingState.ErrorMessage
+		s.indexingMutex.RUnlock()
+		return false, fmt.Errorf("indexing failed: %s", errorMsg)
+	}
+
+	if finalStatus == "completed" || finalStatus == "cancelled" {
 		return true, nil
 	}
 
-	// Indexing is in progress - wait for completion using autoIndexManager signals
-	if status == "indexing" || status == "estimating" {
-		if s.autoIndexManager == nil {
-			return false, errors.New("indexing in progress but auto-index manager unavailable")
-		}
-
-		// Determine timeout from config or use default
-		timeoutSeconds := DefaultIndexingTimeout
-		if s.cfg != nil && s.cfg.Performance.IndexingTimeoutSec > 0 {
-			timeoutSeconds = s.cfg.Performance.IndexingTimeoutSec
-		}
-		timeout := time.Duration(timeoutSeconds) * time.Second
-
-		s.diagnosticLogger.Printf("Indexing in progress, waiting up to %v for completion", timeout)
-
-		// Wait for completion using channel-based signaling (no polling)
-		finalStatus, err := s.autoIndexManager.waitForCompletion(timeout)
-		if err != nil {
-			return false, fmt.Errorf("indexing timeout after %v - codebase indexing is taking longer than expected. For large projects, check index_stats for progress", timeout)
-		}
-
-		// Check final status after waiting
-		if finalStatus == "failed" {
-			s.indexingMutex.RLock()
-			errorMsg = s.indexingState.ErrorMessage
-			s.indexingMutex.RUnlock()
-			return false, fmt.Errorf("indexing failed: %s", errorMsg)
-		}
-
-		if finalStatus == "completed" {
-			return true, nil
-		}
-
-		// Unexpected final status
-		return false, fmt.Errorf("unexpected indexing status after wait: %s", finalStatus)
-	}
-
-	// Unknown status - treat as available
-	return true, nil
+	// Unexpected final status
+	return false, fmt.Errorf("unexpected indexing status after wait: %s", finalStatus)
 }
 
 // sendIndexFailureNotification sends an error notification to MCP clients about indexing failure
@@ -2060,11 +2066,19 @@ func (s *Server) Start(ctx context.Context) error {
 	// Use dedicated logger instead of modifying global state
 	s.diagnosticLogger.Printf("Starting MCP server with stdio transport")
 
-	// Start pprof HTTP server for profiling (optional, controlled by env var)
+	// Start pprof HTTP server for profiling (optional, controlled by env var).
+	// Uses a dedicated mux bound to localhost only for security.
 	if pprofPort := os.Getenv("LCI_PPROF_PORT"); pprofPort != "" {
 		go func() {
-			s.diagnosticLogger.Printf("Starting pprof server on http://localhost:%s/debug/pprof/", pprofPort)
-			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
+			pprofMux := http.NewServeMux()
+			pprofMux.HandleFunc("/debug/pprof/", nethttppprof.Index)
+			pprofMux.HandleFunc("/debug/pprof/cmdline", nethttppprof.Cmdline)
+			pprofMux.HandleFunc("/debug/pprof/profile", nethttppprof.Profile)
+			pprofMux.HandleFunc("/debug/pprof/symbol", nethttppprof.Symbol)
+			pprofMux.HandleFunc("/debug/pprof/trace", nethttppprof.Trace)
+			addr := "127.0.0.1:" + pprofPort
+			s.diagnosticLogger.Printf("Starting pprof server on http://%s/debug/pprof/", addr)
+			if err := http.ListenAndServe(addr, pprofMux); err != nil {
 				s.diagnosticLogger.Printf("pprof server error: %v", err)
 			}
 		}()

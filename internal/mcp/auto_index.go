@@ -69,6 +69,12 @@ func (m *AutoIndexingManager) startAutoIndexing(rootPath string, cfg *config.Con
 	m.errorMessage = ""
 	m.mu.Unlock()
 
+	// Sync with server state immediately so checkIndexAvailability() sees
+	// "estimating" instead of stale "idle" before the goroutine starts.
+	// Without this, there's a race where requests arrive while the server's
+	// indexingState.Status is still "idle", causing empty results.
+	m.syncWithServerState()
+
 	// Start indexing in background goroutine
 	go m.runAutoIndexing(rootPath, cfg)
 

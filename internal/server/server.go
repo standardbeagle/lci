@@ -278,11 +278,23 @@ func (s *IndexServer) handleGetSymbol(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Add GetSymbol method to MasterIndex
-	// For now, return not implemented
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	symbol := s.indexer.GetEnhancedSymbol(req.SymbolID)
+	if symbol == nil {
+		http.Error(w, fmt.Sprintf("symbol %d not found", req.SymbolID), http.StatusNotFound)
+		return
+	}
+
 	response := GetSymbolResponse{
-		Symbol: nil,
-		Error:  "GetSymbol not yet implemented",
+		Symbol: symbol,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -297,11 +309,23 @@ func (s *IndexServer) handleGetFileInfo(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: Add GetFileInfo method to MasterIndex
-	// For now, return not implemented
+	s.mu.RLock()
+	ready := s.searchEngine != nil
+	s.mu.RUnlock()
+
+	if !ready {
+		http.Error(w, "index not ready - still indexing", http.StatusServiceUnavailable)
+		return
+	}
+
+	fileInfo := s.indexer.GetFileInfo(req.FileID)
+	if fileInfo == nil {
+		http.Error(w, fmt.Sprintf("file %d not found", req.FileID), http.StatusNotFound)
+		return
+	}
+
 	response := GetFileInfoResponse{
-		FileInfo: nil,
-		Error:    "GetFileInfo not yet implemented",
+		FileInfo: fileInfo,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

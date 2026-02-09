@@ -3,7 +3,7 @@ package version
 // Version information for Lightning Code Index
 const (
 	// Version is the current semantic version of LCI
-	Version = "0.4.0"
+	Version = "0.4.1"
 
 	// BuildDate is set during build time (use -ldflags)
 	BuildDate = "development"

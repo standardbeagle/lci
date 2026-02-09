@@ -3,7 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/lci/internal/config"
@@ -189,6 +192,302 @@ func TestIndexFailureHandling(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestCheckIndexAvailability_StateSyncOnStart verifies that when autoIndexManager
+// starts indexing, the server's indexingState.Status is immediately updated so that
+// checkIndexAvailability() does not see stale "idle" status and allow requests through
+// to an empty index. This was the root cause of the ABC-Bench empty results bug.
+func TestCheckIndexAvailability_StateSyncOnStart(t *testing.T) {
+	cfg := &config.Config{
+		Project: config.Project{
+			Name: "test-project",
+			Root: t.TempDir(),
+		},
+		Index: config.Index{
+			MaxFileSize:    1048576,
+			MaxTotalSizeMB: 100,
+			MaxFileCount:   1000,
+		},
+		Performance: config.Performance{
+			MaxMemoryMB:   512,
+			MaxGoroutines: 4,
+		},
+		Include: []string{"**/*.go"},
+	}
+
+	gi := indexing.NewMasterIndex(cfg)
+	defer gi.Close()
+
+	server, err := NewServer(gi, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	t.Run("ServerStatusSyncedAfterAutoIndexStart", func(t *testing.T) {
+		// Simulate the state as if no auto-indexing ran yet (reset to idle).
+		server.indexingMutex.Lock()
+		server.indexingState.Status = "idle"
+		server.indexingMutex.Unlock()
+
+		// Create a fresh autoIndexManager and start it.
+		// The root won't have a project marker, but what matters is that
+		// startAutoIndexing sets the manager status and syncs to the server.
+		manager := NewAutoIndexingManager(server)
+		server.autoIndexManager = manager
+
+		// Manually trigger the manager's startup sequence (same as startAutoIndexing
+		// but without actually launching the goroutine, to test the sync step).
+		atomic.StoreInt32(&manager.running, 1)
+		manager.mu.Lock()
+		manager.status = "estimating"
+		manager.mu.Unlock()
+		manager.syncWithServerState()
+
+		// Verify: server's indexingState should now reflect "estimating", not "idle"
+		server.indexingMutex.RLock()
+		status := server.indexingState.Status
+		server.indexingMutex.RUnlock()
+
+		if status != "estimating" {
+			t.Errorf("Expected server indexingState.Status to be %q after sync, got %q", "estimating", status)
+		}
+
+		// Reset
+		atomic.StoreInt32(&manager.running, 0)
+		manager.Close()
+	})
+}
+
+// TestCheckIndexAvailability_ManagerAuthoritativeOverStaleServer verifies that
+// checkIndexAvailability() uses the autoIndexManager as the authoritative source
+// when the server's synced status is stale. This catches the case where the manager
+// has moved to "indexing" but the server still shows "idle".
+func TestCheckIndexAvailability_ManagerAuthoritativeOverStaleServer(t *testing.T) {
+	cfg := &config.Config{
+		Project: config.Project{
+			Name: "test-project",
+			Root: t.TempDir(),
+		},
+		Index: config.Index{
+			MaxFileSize:    1048576,
+			MaxTotalSizeMB: 100,
+			MaxFileCount:   1000,
+		},
+		Performance: config.Performance{
+			MaxMemoryMB:         512,
+			MaxGoroutines:       4,
+			IndexingTimeoutSec:  2, // Short timeout for test
+		},
+		Include: []string{"**/*.go"},
+	}
+
+	gi := indexing.NewMasterIndex(cfg)
+	defer gi.Close()
+
+	server, err := NewServer(gi, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	t.Run("StaleIdleWithRunningManager", func(t *testing.T) {
+		// Set server state to "idle" (stale) while manager is actually running
+		server.indexingMutex.Lock()
+		server.indexingState.Status = "idle"
+		server.indexingMutex.Unlock()
+
+		manager := NewAutoIndexingManager(server)
+		server.autoIndexManager = manager
+
+		// Simulate manager in "indexing" state and running
+		atomic.StoreInt32(&manager.running, 1)
+		manager.mu.Lock()
+		manager.status = "indexing"
+		manager.mu.Unlock()
+
+		// Complete the indexing immediately so waitForCompletion doesn't block
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			manager.updateStatus("completed")
+			atomic.StoreInt32(&manager.running, 0)
+		}()
+
+		// checkIndexAvailability should detect the mismatch, use the manager's
+		// "indexing" status, and wait for completion rather than returning immediately
+		available, err := server.checkIndexAvailability()
+		if err != nil {
+			t.Fatalf("Expected no error after completion, got: %v", err)
+		}
+		if !available {
+			t.Error("Expected index to be available after completion")
+		}
+
+		manager.Close()
+	})
+}
+
+// TestCheckIndexAvailability_AllStatuses verifies that every possible status
+// from autoIndexManager is handled explicitly (no catch-all "treat as available").
+func TestCheckIndexAvailability_AllStatuses(t *testing.T) {
+	cfg := &config.Config{
+		Project: config.Project{
+			Name: "test-project",
+			Root: t.TempDir(),
+		},
+		Index: config.Index{
+			MaxFileSize:    1048576,
+			MaxTotalSizeMB: 100,
+			MaxFileCount:   1000,
+		},
+		Performance: config.Performance{
+			MaxMemoryMB:         512,
+			MaxGoroutines:       4,
+			IndexingTimeoutSec:  1,
+		},
+		Include: []string{"**/*.go"},
+	}
+
+	gi := indexing.NewMasterIndex(cfg)
+	defer gi.Close()
+
+	server, err := NewServer(gi, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		status         string
+		expectReady    bool
+		expectWait     bool // true if checkIndexAvailability will try to wait
+		expectErrPart  string
+	}{
+		{"idle", "idle", true, false, ""},
+		{"completed", "completed", true, false, ""},
+		{"cancelled", "cancelled", true, false, ""},
+		{"failed", "failed", false, false, "indexing failed"},
+		{"estimating_waits", "estimating", false, true, ""},
+		{"waiting_waits", "waiting", false, true, ""},
+		{"indexing_waits", "indexing", false, true, ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Set up fresh manager for each test
+			manager := NewAutoIndexingManager(server)
+			server.autoIndexManager = manager
+
+			// Set server status directly
+			server.indexingMutex.Lock()
+			server.indexingState.Status = tc.status
+			server.indexingState.ErrorMessage = ""
+			if tc.status == "failed" {
+				server.indexingState.ErrorMessage = "test error"
+			}
+			server.indexingMutex.Unlock()
+
+			if tc.expectWait {
+				// For in-progress statuses: manager is not running so
+				// waitForCompletion returns the current status immediately.
+				// The result depends on what status the manager is in.
+				// Since manager is idle/not running, waitForCompletion returns immediately.
+				available, err := server.checkIndexAvailability()
+
+				// When the manager isn't running, waitForCompletion returns the
+				// manager's current status (idle), which doesn't match "completed",
+				// so we get "unexpected indexing status after wait: idle".
+				if available {
+					t.Errorf("Expected not-immediately-available for in-progress status %q", tc.status)
+				}
+				if err == nil {
+					t.Errorf("Expected error for unresolved in-progress status %q", tc.status)
+				}
+			} else if tc.expectReady {
+				available, err := server.checkIndexAvailability()
+				if err != nil {
+					t.Errorf("Expected no error for status %q, got: %v", tc.status, err)
+				}
+				if !available {
+					t.Errorf("Expected available for status %q", tc.status)
+				}
+			} else {
+				// Expect failure (e.g., "failed" status)
+				available, err := server.checkIndexAvailability()
+				if available {
+					t.Errorf("Expected not-available for status %q", tc.status)
+				}
+				if err == nil {
+					t.Errorf("Expected error for status %q", tc.status)
+				} else if tc.expectErrPart != "" && !strings.Contains(err.Error(), tc.expectErrPart) {
+					t.Errorf("Expected error containing %q, got: %v", tc.expectErrPart, err)
+				}
+			}
+
+			manager.Close()
+		})
+	}
+}
+
+// TestAutoIndexManager_SyncOnStart verifies that startAutoIndexing() syncs the
+// server's indexingState before launching the goroutine.
+func TestAutoIndexManager_SyncOnStart(t *testing.T) {
+	cfg := &config.Config{
+		Project: config.Project{
+			Name: "test-project",
+			Root: t.TempDir(),
+		},
+		Index: config.Index{
+			MaxFileSize:    1048576,
+			MaxTotalSizeMB: 100,
+			MaxFileCount:   1000,
+		},
+		Performance: config.Performance{
+			MaxMemoryMB:   512,
+			MaxGoroutines: 4,
+		},
+		Include: []string{"**/*.go"},
+	}
+
+	gi := indexing.NewMasterIndex(cfg)
+	defer gi.Close()
+
+	server, err := NewServer(gi, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	// Reset server state to idle
+	server.indexingMutex.Lock()
+	server.indexingState.Status = "idle"
+	server.indexingMutex.Unlock()
+
+	manager := NewAutoIndexingManager(server)
+	server.autoIndexManager = manager
+
+	// Start auto-indexing (root dir has no project marker, so the goroutine
+	// will set status to "indexing" then complete quickly)
+	err = manager.startAutoIndexing(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatalf("startAutoIndexing failed: %v", err)
+	}
+
+	// IMMEDIATELY after startAutoIndexing returns (before goroutine runs),
+	// the server's status should NOT be "idle" anymore.
+	server.indexingMutex.RLock()
+	status := server.indexingState.Status
+	server.indexingMutex.RUnlock()
+
+	if status == "idle" {
+		t.Errorf("Server indexingState.Status is still %q immediately after startAutoIndexing; expected %q",
+			status, "estimating")
+	}
+	if status != "estimating" {
+		t.Errorf("Expected server indexingState.Status to be %q, got %q", "estimating", status)
+	}
+
+	// Wait for the goroutine to finish
+	_, _ = manager.waitForCompletion(5 * time.Second)
+	manager.Close()
 }
 
 // Helper function to check if a string contains a substring (case-sensitive)
