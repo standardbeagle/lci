@@ -53,13 +53,10 @@ func BenchmarkZeroAllocStringRef(b *testing.B) {
 	testContent := createTestContent(1000) // 1KB test content
 	fileID := fileStore.LoadFile("test.go", testContent)
 
-	// Create zero-allocation store
-	zeroAllocStore := core.NewZeroAllocFileContentStoreFromStore(fileStore)
-
-	// Get zero-allocation line references
+	// Get zero-allocation line references directly from FileContentStore
 	lineRefs := make([]types.ZeroAllocStringRef, 0, 100)
 	for i := 0; i < 100; i++ {
-		if zeroRef := zeroAllocStore.GetZeroAllocLine(fileID, i); !zeroRef.IsEmpty() {
+		if zeroRef := fileStore.GetZeroAllocLine(fileID, i); !zeroRef.IsEmpty() {
 			lineRefs = append(lineRefs, zeroRef)
 		}
 	}
@@ -134,7 +131,6 @@ func BenchmarkContextSearchZeroAlloc(b *testing.B) {
 	testContent := createTestContent(5000) // 5KB test content
 	fileID := fileStore.LoadFile("test.go", testContent)
 
-	zeroAllocStore := core.NewZeroAllocFileContentStoreFromStore(fileStore)
 	pattern := "function"
 	contextLines := 3
 
@@ -143,7 +139,7 @@ func BenchmarkContextSearchZeroAlloc(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// ZERO ALLOCATION! Direct context search
-		result := zeroAllocStore.FindWithContext(fileID, pattern, contextLines)
+		result := fileStore.FindWithContext(fileID, pattern, contextLines)
 
 		// Process results without allocation
 		for _, lineRef := range result.Lines {
@@ -163,10 +159,8 @@ func BenchmarkStringOperations(b *testing.B) {
 	defer fileStore.Close()
 	testContent := createTestContent(1000)
 	fileID := fileStore.LoadFile("test.go", testContent)
-	zeroAllocStore := core.NewZeroAllocFileContentStoreFromStore(fileStore)
-
 	lineRef, _ := fileStore.GetLine(fileID, 50) // Get a line to work with
-	zeroRef := zeroAllocStore.GetZeroAllocLine(fileID, 50)
+	zeroRef := fileStore.GetZeroAllocLine(fileID, 50)
 
 	tests := []struct {
 		name        string
@@ -223,7 +217,6 @@ func BenchmarkMultiPatternSearch(b *testing.B) {
 	defer fileStore.Close()
 	testContent := createTestContent(2000) // 2KB test content
 	fileID := fileStore.LoadFile("test.go", testContent)
-	zeroAllocStore := core.NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	patterns := []string{"func", "var", "const", "import", "package", "struct", "interface", "type"}
 
@@ -258,7 +251,7 @@ func BenchmarkMultiPatternSearch(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			results := make(map[string]int)
 			for _, pattern := range patterns {
-				lineNumbers := zeroAllocStore.FindAllLinesWithPattern(fileID, pattern)
+				lineNumbers := fileStore.FindAllLinesWithPattern(fileID, pattern)
 				results[pattern] = len(lineNumbers)
 			}
 			_ = results
@@ -272,7 +265,6 @@ func BenchmarkMemoryUsage(b *testing.B) {
 	defer fileStore.Close()
 	testContent := createTestContent(1000)
 	fileID := fileStore.LoadFile("test.go", testContent)
-	zeroAllocStore := core.NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	b.Run("Traditional_Memory", func(b *testing.B) {
 		var m1, m2 runtime.MemStats
@@ -305,7 +297,7 @@ func BenchmarkMemoryUsage(b *testing.B) {
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			lineNumbers := zeroAllocStore.FindAllLinesWithPattern(fileID, "func")
+			lineNumbers := fileStore.FindAllLinesWithPattern(fileID, "func")
 			_ = lineNumbers // Use the result to prevent optimization
 		}
 
@@ -321,7 +313,6 @@ func BenchmarkConcurrentSearch(b *testing.B) {
 	defer fileStore.Close()
 	testContent := createTestContent(2000)
 	fileID := fileStore.LoadFile("test.go", testContent)
-	zeroAllocStore := core.NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	pattern := "function"
 
@@ -351,7 +342,7 @@ func BenchmarkConcurrentSearch(b *testing.B) {
 
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				lineNumbers := zeroAllocStore.FindAllLinesWithPattern(fileID, pattern)
+				lineNumbers := fileStore.FindAllLinesWithPattern(fileID, pattern)
 				_ = len(lineNumbers)
 			}
 		})

@@ -19,13 +19,13 @@ type ZeroAllocSearchMatch struct {
 // ZeroAllocSemanticFilter provides zero-allocation semantic filtering operations
 // This eliminates string allocations from semantic filtering functions
 type ZeroAllocSemanticFilter struct {
-	zeroAllocStore *core.ZeroAllocFileContentStore
+	store *core.FileContentStore
 }
 
 // NewZeroAllocSemanticFilter creates a new zero-allocation semantic filter
 func NewZeroAllocSemanticFilter(fileStore *core.FileContentStore) *ZeroAllocSemanticFilter {
 	return &ZeroAllocSemanticFilter{
-		zeroAllocStore: core.NewZeroAllocFileContentStoreFromStore(fileStore),
+		store: fileStore,
 	}
 }
 
@@ -159,7 +159,7 @@ func (zasf *ZeroAllocSemanticFilter) isMutableSymbolZeroAlloc(symbol *types.Enha
 		return true
 	}
 	// Get the line content as ZeroAllocStringRef
-	lineRef := zasf.zeroAllocStore.GetZeroAllocLine(fileInfo.ID, line-1)
+	lineRef := zasf.store.GetZeroAllocLine(fileInfo.ID, line-1)
 	if lineRef.IsEmpty() {
 		return false
 	}
@@ -192,7 +192,7 @@ func (zasf *ZeroAllocSemanticFilter) isGlobalSymbolZeroAlloc(symbol *types.Enhan
 		return true
 	}
 	// Get the line content as ZeroAllocStringRef
-	lineRef := zasf.zeroAllocStore.GetZeroAllocLine(fileInfo.ID, symbol.Line-1)
+	lineRef := zasf.store.GetZeroAllocLine(fileInfo.ID, symbol.Line-1)
 	if lineRef.IsEmpty() {
 		return false
 	}
@@ -220,7 +220,7 @@ func (zasf *ZeroAllocSemanticFilter) isGlobalSymbolZeroAlloc(symbol *types.Enhan
 
 // isInCommentZeroAlloc checks if a line is in a comment using zero-alloc operations
 func (zasf *ZeroAllocSemanticFilter) isInCommentZeroAlloc(fileInfo *types.FileInfo, line int) bool {
-	lineRef := zasf.zeroAllocStore.GetZeroAllocLine(fileInfo.ID, line-1)
+	lineRef := zasf.store.GetZeroAllocLine(fileInfo.ID, line-1)
 	if lineRef.IsEmpty() {
 		return false
 	}
@@ -288,7 +288,7 @@ func (zasf *ZeroAllocSemanticFilter) findLineForBytePosition(fileID types.FileID
 
 	// Iterate through all lines
 	for i := 0; i < 10000; i++ { // Reasonable max lines limit
-		lineRef := zasf.zeroAllocStore.GetZeroAllocLine(fileID, i) // 0-based
+		lineRef := zasf.store.GetZeroAllocLine(fileID, i) // 0-based
 
 		// Calculate line length (including newline)
 		lineLen := lineRef.Len() + 1 // +1 for newline

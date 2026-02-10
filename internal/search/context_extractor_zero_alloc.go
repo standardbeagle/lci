@@ -10,7 +10,7 @@ import (
 type ZeroAllocContextExtractor struct {
 	maxLines            int
 	defaultContextLines int
-	zeroAllocStore       *core.ZeroAllocFileContentStore
+	store               *core.FileContentStore
 }
 
 // NewZeroAllocContextExtractor creates a new zero-allocation context extractor
@@ -18,7 +18,7 @@ func NewZeroAllocContextExtractor(fileStore *core.FileContentStore) *ZeroAllocCo
 	return &ZeroAllocContextExtractor{
 		maxLines:            0, // No limit by default
 		defaultContextLines: DefaultContextLines,
-		zeroAllocStore:       core.NewZeroAllocFileContentStoreFromStore(fileStore),
+		store:               fileStore,
 	}
 }
 
@@ -27,7 +27,7 @@ func NewZeroAllocContextExtractorWithConfig(fileStore *core.FileContentStore, ma
 	return &ZeroAllocContextExtractor{
 		maxLines:            maxLines,
 		defaultContextLines: defaultContextLines,
-		zeroAllocStore:       core.NewZeroAllocFileContentStoreFromStore(fileStore),
+		store:               fileStore,
 	}
 }
 
@@ -43,7 +43,7 @@ type ZeroAllocExtractedContext struct {
 // ExtractContextZeroAlloc performs zero-allocation context extraction
 func (zce *ZeroAllocContextExtractor) ExtractContextZeroAlloc(fileID types.FileID, matchLine int, maxContextLines int) ZeroAllocExtractedContext {
 	// Get the matching line as ZeroAllocStringRef
-	matchLineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, matchLine-1) // Convert to 0-based
+	matchLineRef := zce.store.GetZeroAllocLine(fileID, matchLine-1) // Convert to 0-based
 	if matchLineRef.IsEmpty() {
 		return ZeroAllocExtractedContext{
 			MatchLine:    matchLine,
@@ -90,7 +90,7 @@ func (zce *ZeroAllocContextExtractor) ExtractFunctionContextZeroAlloc(fileID typ
 
 	// Get all lines in the function
 	functionCount := functionEnd - functionStart + 1
-	functionLines := zce.zeroAllocStore.GetZeroAllocLines(fileID, functionStart, functionCount)
+	functionLines := zce.store.GetZeroAllocLines(fileID, functionStart, functionCount)
 
 	// Calculate match index within function
 	matchIndexInFunction := matchLine - 1 - functionStart
@@ -118,7 +118,7 @@ func (zce *ZeroAllocContextExtractor) getBeforeLinesZeroAlloc(fileID types.FileI
 
 	start := contextMax(0, lineIndex-maxLines)
 	count := lineIndex - start
-	lines := zce.zeroAllocStore.GetZeroAllocLines(fileID, start, count)
+	lines := zce.store.GetZeroAllocLines(fileID, start, count)
 
 	// Return in original order (oldest to newest)
 	result := make([]types.ZeroAllocStringRef, len(lines))
@@ -136,7 +136,7 @@ func (zce *ZeroAllocContextExtractor) getAfterLinesZeroAlloc(fileID types.FileID
 	}
 
 	start := lineIndex + 1
-	totalLines := zce.zeroAllocStore.GetLineCount(fileID)
+	totalLines := zce.store.GetLineCount(fileID)
 
 	// Don't go beyond file end
 	end := contextMin(start+maxLines, totalLines)
@@ -145,18 +145,18 @@ func (zce *ZeroAllocContextExtractor) getAfterLinesZeroAlloc(fileID types.FileID
 	}
 
 	count := end - start
-	return zce.zeroAllocStore.GetZeroAllocLines(fileID, start, count)
+	return zce.store.GetZeroAllocLines(fileID, start, count)
 }
 
 // findFunctionBoundariesZeroAlloc finds function start and end using zero-alloc operations
 // Uses brace depth tracking to find the actual function end, not just the first closing brace
 func (zce *ZeroAllocContextExtractor) findFunctionBoundariesZeroAlloc(fileID types.FileID, lineIndex int) (int, int) {
-	totalLines := zce.zeroAllocStore.GetLineCount(fileID)
+	totalLines := zce.store.GetLineCount(fileID)
 
 	// Search backwards for function start
 	start := lineIndex
 	for start >= 0 {
-		lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, start)
+		lineRef := zce.store.GetZeroAllocLine(fileID, start)
 		if lineRef.IsEmpty() {
 			start--
 			continue
@@ -181,7 +181,7 @@ func (zce *ZeroAllocContextExtractor) findFunctionBoundariesZeroAlloc(fileID typ
 	end := start
 
 	for end < totalLines {
-		lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, end)
+		lineRef := zce.store.GetZeroAllocLine(fileID, end)
 		lineStr := lineRef.String()
 
 		// Count braces (simple heuristic - doesn't handle strings/comments perfectly)
@@ -228,14 +228,14 @@ func (zce *ZeroAllocContextExtractor) extractContextWithIntelligentPadding(fileI
 			contextEnd := contextMin(functionEnd, matchLine-1+padding)
 
 			contextCount := contextEnd - contextStart + 1
-			contextLines := zce.zeroAllocStore.GetZeroAllocLines(fileID, contextStart, contextCount)
+			contextLines := zce.store.GetZeroAllocLines(fileID, contextStart, contextCount)
 
 			matchIndex := matchLine-1 - contextStart
 
 			return ZeroAllocExtractedContext{
 				MatchLine:    matchLine,
 				BeforeLines:  contextLines[:matchIndex],
-				MatchLineRef: zce.zeroAllocStore.GetZeroAllocLine(fileID, matchLine-1),
+				MatchLineRef: zce.store.GetZeroAllocLine(fileID, matchLine-1),
 				AfterLines:   contextLines[matchIndex+1:],
 				TotalLines:   len(contextLines),
 			}
@@ -254,7 +254,7 @@ func (zce *ZeroAllocContextExtractor) findFunctionBoundaries(fileID types.FileID
 // ExtractBlockContextZeroAlloc extracts block context using zero-alloc operations
 func (zce *ZeroAllocContextExtractor) ExtractBlockContextZeroAlloc(fileID types.FileID, matchLine int) ZeroAllocExtractedContext {
 	// Find the start of the current block (indentation level)
-	lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, matchLine-1)
+	lineRef := zce.store.GetZeroAllocLine(fileID, matchLine-1)
 	if lineRef.IsEmpty() {
 		return ZeroAllocExtractedContext{}
 	}
@@ -264,7 +264,7 @@ func (zce *ZeroAllocContextExtractor) ExtractBlockContextZeroAlloc(fileID types.
 	// Find block boundaries based on indentation
 	start := matchLine - 1
 	for start >= 0 {
-		lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, start)
+		lineRef := zce.store.GetZeroAllocLine(fileID, start)
 		if lineRef.IsEmpty() {
 			break
 		}
@@ -279,9 +279,9 @@ func (zce *ZeroAllocContextExtractor) ExtractBlockContextZeroAlloc(fileID types.
 
 	// Find end of block
 	end := matchLine - 1
-	totalLines := zce.zeroAllocStore.GetLineCount(fileID)
+	totalLines := zce.store.GetLineCount(fileID)
 	for end < totalLines {
-		lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, end)
+		lineRef := zce.store.GetZeroAllocLine(fileID, end)
 		if lineRef.IsEmpty() {
 			break
 		}
@@ -296,7 +296,7 @@ func (zce *ZeroAllocContextExtractor) ExtractBlockContextZeroAlloc(fileID types.
 
 	// Extract block lines
 	blockCount := end - start - 1
-	blockLines := zce.zeroAllocStore.GetZeroAllocLines(fileID, start+1, blockCount)
+	blockLines := zce.store.GetZeroAllocLines(fileID, start+1, blockCount)
 	matchIndex := matchLine - start - 2 // Adjust for 1-based indexing
 
 	if matchIndex < 0 || matchIndex >= len(blockLines) {
@@ -371,7 +371,7 @@ func (zce *ZeroAllocContextExtractor) IsCodeLineZeroAlloc(lineRef types.ZeroAllo
 
 // ExtractSimilarPatternsZeroAlloc finds similar patterns using zero-alloc operations
 func (zce *ZeroAllocContextExtractor) ExtractSimilarPatternsZeroAlloc(fileID types.FileID, targetLineRef types.ZeroAllocStringRef, maxPatterns int) []types.ZeroAllocStringRef {
-	totalLines := zce.zeroAllocStore.GetLineCount(fileID)
+	totalLines := zce.store.GetLineCount(fileID)
 	similarPatterns := make([]types.ZeroAllocStringRef, 0, maxPatterns)
 
 	// Improved similarity check: look for lines with similar structure
@@ -379,7 +379,7 @@ func (zce *ZeroAllocContextExtractor) ExtractSimilarPatternsZeroAlloc(fileID typ
 	targetTrimmed := targetLineRef.TrimSpace()
 
 	for i := 0; i < totalLines && len(similarPatterns) < maxPatterns; i++ {
-		lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, i)
+		lineRef := zce.store.GetZeroAllocLine(fileID, i)
 		if lineRef.IsEmpty() {
 			continue
 		}
@@ -416,7 +416,7 @@ func (zce *ZeroAllocContextExtractor) ExtractSimilarPatternsZeroAlloc(fileID typ
 
 // CalculatePatternUniquenessZeroAlloc calculates how unique a pattern is using zero-alloc operations
 func (zce *ZeroAllocContextExtractor) CalculatePatternUniquenessZeroAlloc(fileID types.FileID, patternRef types.ZeroAllocStringRef) float64 {
-	totalLines := zce.zeroAllocStore.GetLineCount(fileID)
+	totalLines := zce.store.GetLineCount(fileID)
 	if totalLines == 0 {
 		return 1.0
 	}
@@ -425,7 +425,7 @@ func (zce *ZeroAllocContextExtractor) CalculatePatternUniquenessZeroAlloc(fileID
 	trimmedPattern := patternRef.TrimSpace()
 
 	for i := 0; i < totalLines; i++ {
-		lineRef := zce.zeroAllocStore.GetZeroAllocLine(fileID, i)
+		lineRef := zce.store.GetZeroAllocLine(fileID, i)
 		if lineRef.IsEmpty() {
 			continue
 		}

@@ -7,10 +7,9 @@ import (
 	"github.com/standardbeagle/lci/internal/types"
 )
 
-func TestZeroAllocFileContentStore_BasicOperations(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_BasicOperations(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	testContent := []byte(`package main
 
@@ -28,19 +27,19 @@ func helper() {
 	fileID := fileStore.LoadFile("test.go", testContent)
 
 	// Test GetLineCount
-	lineCount := zeroAllocStore.GetLineCount(fileID)
+	lineCount := fileStore.GetLineCount(fileID)
 	if lineCount == 0 {
 		t.Error("GetLineCount should return > 0 for non-empty file")
 	}
 
 	// Test GetZeroAllocLine
-	lineRef := zeroAllocStore.GetZeroAllocLine(fileID, 0)
+	lineRef := fileStore.GetZeroAllocLine(fileID, 0)
 	if lineRef.IsEmpty() {
 		t.Error("GetZeroAllocLine should return valid reference for existing line")
 	}
 
 	// Test GetZeroAllocLines
-	lines := zeroAllocStore.GetZeroAllocLines(fileID, 0, lineCount)
+	lines := fileStore.GetZeroAllocLines(fileID, 0, lineCount)
 	if len(lines) == 0 {
 		t.Error("GetZeroAllocLines should return some lines")
 	}
@@ -49,10 +48,9 @@ func helper() {
 	}
 }
 
-func TestZeroAllocFileContentStore_PatternMatching(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_PatternMatching(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	testContent := []byte(`package main
 
@@ -71,28 +69,27 @@ func testFunction() {
 	fileID := fileStore.LoadFile("test.go", testContent)
 
 	// Test FindAllLinesWithPattern
-	lines := zeroAllocStore.FindAllLinesWithPattern(fileID, "func")
+	lines := fileStore.FindAllLinesWithPattern(fileID, "func")
 	if len(lines) == 0 {
 		t.Error("FindAllLinesWithPattern should find lines containing 'func'")
 	}
 
 	// Test FindAllLinesWithPrefix
-	prefixLines := zeroAllocStore.FindAllLinesWithPrefix(fileID, "func ")
+	prefixLines := fileStore.FindAllLinesWithPrefix(fileID, "func ")
 	if len(prefixLines) == 0 {
 		t.Error("FindAllLinesWithPrefix should find lines starting with 'func '")
 	}
 
 	// Test FindAllLinesWithSuffix
-	suffixLines := zeroAllocStore.FindAllLinesWithSuffix(fileID, "{")
+	suffixLines := fileStore.FindAllLinesWithSuffix(fileID, "{")
 	if len(suffixLines) == 0 {
 		t.Error("FindAllLinesWithSuffix should find lines ending with '{'")
 	}
 }
 
-func TestZeroAllocFileContentStore_ContextSearch(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_ContextSearch(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	testContent := []byte(`package main
 
@@ -112,7 +109,7 @@ func helper() {
 	fileID := fileStore.LoadFile("test.go", testContent)
 
 	// Test FindWithContext
-	result := zeroAllocStore.FindWithContext(fileID, "Hello", 1)
+	result := fileStore.FindWithContext(fileID, "Hello", 1)
 	if len(result.Lines) == 0 {
 		t.Error("FindWithContext should find matching lines")
 	}
@@ -130,10 +127,9 @@ func helper() {
 	}
 }
 
-func TestZeroAllocFileContentStore_ContentAnalysis(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_ContentAnalysis(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	testContent := []byte(`package main
 
@@ -163,28 +159,27 @@ type TestStruct struct {
 	fileID := fileStore.LoadFile("test.go", testContent)
 
 	// Test IsCommentLine
-	commentLines := zeroAllocStore.FindAllLinesWithPattern(fileID, "//")
+	commentLines := fileStore.FindAllLinesWithPattern(fileID, "//")
 	if len(commentLines) == 0 {
 		t.Error("Should find comment lines")
 	}
 
 	// Test HasCodeContent - find lines that actually contain code
-	codeLines := zeroAllocStore.FindAllLinesWithPattern(fileID, "func")
+	codeLines := fileStore.FindAllLinesWithPattern(fileID, "func")
 	if len(codeLines) == 0 {
 		t.Error("Should find code lines")
 	}
 
 	// Test IsEmptyLine
-	emptyLines := zeroAllocStore.FindAllLinesWithPattern(fileID, "")
+	emptyLines := fileStore.FindAllLinesWithPattern(fileID, "")
 	// This test depends on implementation details of pattern matching
 	// Just verify the function exists and can be called
 	_ = emptyLines
 }
 
-func TestZeroAllocFileContentStore_LineOperations(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_LineOperations(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	testContent := []byte(`  line with spaces
 \tline with tabs
@@ -193,9 +188,9 @@ func TestZeroAllocFileContentStore_LineOperations(t *testing.T) {
 	fileID := fileStore.LoadFile("test.go", testContent)
 
 	// Test GetLine operations
-	lineCount := zeroAllocStore.GetLineCount(fileID)
+	lineCount := fileStore.GetLineCount(fileID)
 	for i := 0; i < lineCount; i++ {
-		lineRef := zeroAllocStore.GetZeroAllocLine(fileID, i)
+		lineRef := fileStore.GetZeroAllocLine(fileID, i)
 
 		// Verify basic operations work
 		_ = lineRef.Len()
@@ -212,20 +207,19 @@ func TestZeroAllocFileContentStore_LineOperations(t *testing.T) {
 	}
 }
 
-func TestZeroAllocFileContentStore_EdgeCases(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_EdgeCases(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	// Test with empty file
 	emptyFileID := fileStore.LoadFile("empty.go", []byte{})
 
-	lineCount := zeroAllocStore.GetLineCount(emptyFileID)
+	lineCount := fileStore.GetLineCount(emptyFileID)
 	if lineCount != 0 {
 		t.Errorf("Empty file should have 0 lines, got %d", lineCount)
 	}
 
-	emptyLine := zeroAllocStore.GetZeroAllocLine(emptyFileID, 0)
+	emptyLine := fileStore.GetZeroAllocLine(emptyFileID, 0)
 	if !emptyLine.IsEmpty() {
 		t.Error("Getting line from empty file should return empty reference")
 	}
@@ -234,12 +228,12 @@ func TestZeroAllocFileContentStore_EdgeCases(t *testing.T) {
 	singleLineContent := []byte("package main")
 	singleFileID := fileStore.LoadFile("single.go", singleLineContent)
 
-	singleLineCount := zeroAllocStore.GetLineCount(singleFileID)
+	singleLineCount := fileStore.GetLineCount(singleFileID)
 	if singleLineCount != 1 {
 		t.Errorf("Single line file should have 1 line, got %d", singleLineCount)
 	}
 
-	singleLine := zeroAllocStore.GetZeroAllocLine(singleFileID, 0)
+	singleLine := fileStore.GetZeroAllocLine(singleFileID, 0)
 	if singleLine.IsEmpty() {
 		t.Error("Should get valid line from single line file")
 	}
@@ -249,21 +243,20 @@ func TestZeroAllocFileContentStore_EdgeCases(t *testing.T) {
 
 	// Test with non-existent file ID
 	nonExistentFileID := types.FileID(999999)
-	nonExistentLine := zeroAllocStore.GetZeroAllocLine(nonExistentFileID, 0)
+	nonExistentLine := fileStore.GetZeroAllocLine(nonExistentFileID, 0)
 	if !nonExistentLine.IsEmpty() {
 		t.Error("Getting line from non-existent file should return empty reference")
 	}
 
-	nonExistentCount := zeroAllocStore.GetLineCount(nonExistentFileID)
+	nonExistentCount := fileStore.GetLineCount(nonExistentFileID)
 	if nonExistentCount != 0 {
 		t.Error("Getting line count from non-existent file should return 0")
 	}
 }
 
-func TestZeroAllocFileContentStore_PerformanceCharacteristics(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_PerformanceCharacteristics(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	// Create a larger test file
 	content := make([]byte, 0, 10000)
@@ -275,20 +268,20 @@ func TestZeroAllocFileContentStore_PerformanceCharacteristics(t *testing.T) {
 	fileID := fileStore.LoadFile("large.go", content)
 
 	// Test that operations are efficient
-	lineCount := zeroAllocStore.GetLineCount(fileID)
+	lineCount := fileStore.GetLineCount(fileID)
 	if lineCount != 100 {
 		t.Errorf("Expected 100 lines, got %d", lineCount)
 	}
 
 	// Test pattern matching performance
 	pattern := "func"
-	matchingLines := zeroAllocStore.FindAllLinesWithPattern(fileID, pattern)
+	matchingLines := fileStore.FindAllLinesWithPattern(fileID, pattern)
 	if len(matchingLines) != 100 {
 		t.Errorf("Expected all 100 lines to match 'func', got %d", len(matchingLines))
 	}
 
 	// Test context search performance
-	contextResults := zeroAllocStore.FindWithContext(fileID, "testFunction50", 2)
+	contextResults := fileStore.FindWithContext(fileID, "testFunction50", 2)
 	if len(contextResults.Lines) == 0 {
 		t.Error("Context search should find matches")
 	}
@@ -297,10 +290,9 @@ func TestZeroAllocFileContentStore_PerformanceCharacteristics(t *testing.T) {
 	}
 }
 
-func TestZeroAllocFileContentStore_ConversionFunctions(t *testing.T) {
+func TestFileContentStore_ZeroAlloc_ConversionFunctions(t *testing.T) {
 	fileStore := NewFileContentStore()
 	defer fileStore.Close()
-	zeroAllocStore := NewZeroAllocFileContentStoreFromStore(fileStore)
 
 	testContent := []byte("Hello, World!")
 	fileID := fileStore.LoadFile("test.go", testContent)
@@ -312,7 +304,7 @@ func TestZeroAllocFileContentStore_ConversionFunctions(t *testing.T) {
 	}
 
 	// Convert to zero-alloc reference
-	zeroAllocRef := zeroAllocStore.GetZeroAllocLine(fileID, 0)
+	zeroAllocRef := fileStore.GetZeroAllocLine(fileID, 0)
 	if zeroAllocRef.IsEmpty() {
 		t.Error("Zero-alloc reference should not be empty")
 	}

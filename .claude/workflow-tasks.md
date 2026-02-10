@@ -1,200 +1,72 @@
-# Minimal CLI/MCP Architecture - Server-Only Indexing
+# Task List: Consolidate ZeroAlloc into FileContentStore
 
-## Overview
-Refactor LCI so all indexing happens on the server. CLI commands should only use server APIs.
-The directive: "only server indexes are allowed, the only local functions should be index management functions"
-
-## Current State Analysis
-- Server exists with endpoints: `/status`, `/search`, `/symbol`, `/fileinfo`, `/shutdown`, `/ping`, `/reindex`
-- Only `grepCommand` uses `ensureServerRunning()`
-- `Before` hook still does local indexing for: search, grep, def, refs, stats, tree, unroll, git-analyze
-- `/symbol` and `/fileinfo` return "not implemented"
-
----
-
-## Task 1: Remove Local Indexing from Before Hook
+## Task 1: Merge ZeroAllocFileContentStore methods into FileContentStore
 **Priority:** High
-**Scope:** cmd/lci/main.go (1 file)
-**Description:** Remove the local indexing logic from the `Before` hook for commands that should use the server. Keep only index management commands (like test-run, daemon mode) with local indexing.
+**Scope:** internal/core/file_content_store.go, internal/core/file_content_store_zero_alloc.go
+
+**Description:** Move all methods from `ZeroAllocFileContentStore` into `FileContentStore` directly. The ZeroAlloc wrapper just embeds `*FileContentStore` and adds methods — those methods should be on the base type. Key methods to move: `GetZeroAllocStringRef`, `GetZeroAllocLine`, `GetZeroAllocLines`, `GetZeroAllocContextLines`, `SearchInLine`, `SearchInLines`, `SearchLinesWithAnyPrefix`, `SearchLinesWithAnySuffix`, `getLineOffsets` (the zero-alloc version that accesses snapshot directly), and all bulk/pattern/analysis/JSON/text-processing helpers.
+
+The private helper `getLineOffsets` in the zero-alloc file accesses `fcs.FileContentStore.snapshot.Load()` — when merged, this becomes simply `fcs.snapshot.Load()`.
+
+Also move all the utility methods: `TrimWhitespaceLines`, `FilterEmptyLines`, `FilterCommentLines`, `ExtractFunctionName`, `ExtractVariableName`, `ExtractImportPath`, `ProcessLinesInBulk`, `FindAllLinesWithPattern`, `FindAllLinesWithPrefix`, `FindAllLinesWithSuffix`, `FindFunctionDefinitions`, `FindVariableDeclarations`, `FindImportStatements`, `FindClassDefinitions`, `LinesToJSON`, `ContextToJSON`, `IsCommentLine`, `IsEmptyLine`, `HasCodeContent`, `ExtractBraceContent`, `ExtractParenContent`, `RemoveCommonPrefix`, `findCommonPrefix`, `CountRunes`, `ExtractRunes`, `FindWithContext`.
 
 **Acceptance Criteria:**
-- [ ] Remove `indexCommands` map entries for: search, grep, def, refs, tree, unroll, git-analyze
-- [ ] Keep only index management logic (daemon, test-run, mcp)
-- [ ] Remove the "Indexed X files (Y symbols)" message for server-based commands
-- [ ] Verify Before hook no longer creates local indexer for server commands
+- [ ] All public methods from ZeroAllocFileContentStore exist on FileContentStore
+- [ ] Method signatures unchanged (except receiver type changes from ZeroAllocFileContentStore to FileContentStore)
+- [ ] All tests in file_content_store_test.go still pass
+- [ ] No new imports needed beyond what both files already use
+- [ ] The methods compile and are callable on *FileContentStore
 
-**Context:** Lines 776-812 contain the problematic local indexing in Before hook.
+**Context:** ZeroAllocFileContentStore is at internal/core/file_content_store_zero_alloc.go. It embeds `*FileContentStore` and adds ~30 methods. The base FileContentStore already has GetContent, GetLine, GetLineCount etc.
 
 ---
 
-## Task 2: Add Missing Server Endpoints - Stats
+## Task 2: Update search package consumers to use unified FileContentStore
 **Priority:** High
-**Scope:** internal/server/server.go, internal/server/types.go (2 files)
-**Description:** Add `/stats` endpoint to server to return index statistics (file count, symbol count, memory usage, etc.)
+**Scope:** internal/search/semantic_filter_zero_alloc.go, internal/search/context_extractor_zero_alloc.go, internal/search/string_ref_bench_test.go, internal/search/semantic_filter_test_helpers.go
+
+**Description:** Update `ZeroAllocSemanticFilter` and `ZeroAllocContextExtractor` to accept `*core.FileContentStore` directly instead of wrapping it in `*core.ZeroAllocFileContentStore`. Change fields from `zeroAllocStore *core.ZeroAllocFileContentStore` to `store *core.FileContentStore`. Update all method calls from `zasf.zeroAllocStore.GetZeroAllocLine(...)` to `zasf.store.GetZeroAllocLine(...)` etc. Update constructors `NewZeroAllocSemanticFilter` and `NewZeroAllocContextExtractor` to accept `*core.FileContentStore` directly (removing the `NewZeroAllocFileContentStoreFromStore` wrapper call). Update test helpers and benchmarks similarly.
 
 **Acceptance Criteria:**
-- [ ] Add `StatsRequest` and `StatsResponse` types
-- [ ] Add `handleStats` handler in server.go
-- [ ] Register `/stats` endpoint in `registerHandlers`
-- [ ] Return meaningful statistics from the indexer
+- [ ] `ZeroAllocSemanticFilter.zeroAllocStore` field changed to `store *core.FileContentStore`
+- [ ] `ZeroAllocContextExtractor.zeroAllocStore` field changed to `store *core.FileContentStore`
+- [ ] All constructors accept `*core.FileContentStore` directly
+- [ ] All method calls updated (no more intermediate wrapper)
+- [ ] `go test ./internal/search/...` passes
 
-**Context:** The stats command needs this to show index information without local indexer.
+**Context:** These are the only direct consumers of ZeroAllocFileContentStore. After Task 1 merges the methods, these just need their field types and constructor calls updated.
 
 ---
 
-## Task 3: Add Missing Server Endpoints - Definition
+## Task 3: Remove ZeroAllocFileContentStore wrapper class and update tests
 **Priority:** High
-**Scope:** internal/server/server.go, internal/server/client.go, internal/server/types.go (3 files)
-**Description:** Add `/definition` endpoint to find symbol definitions by name.
+**Scope:** internal/core/file_content_store_zero_alloc.go, internal/core/file_content_store_zero_alloc_test.go
+
+**Description:** Delete the `ZeroAllocFileContentStore` struct, all its constructor functions (`NewZeroAllocFileContentStore`, `NewZeroAllocFileContentStoreFromStore`, `NewZeroAllocFileContentStoreWithLimit`), and the file `file_content_store_zero_alloc.go` itself since all methods were moved to `file_content_store.go` in Task 1. Update tests from `file_content_store_zero_alloc_test.go` — change them to test methods on `*FileContentStore` directly. Either merge into `file_content_store_test.go` or keep as a separate test file but calling base type methods.
 
 **Acceptance Criteria:**
-- [ ] Add `DefinitionRequest` and `DefinitionResponse` types
-- [ ] Add `handleDefinition` handler that searches for definitions
-- [ ] Add `GetDefinition` method to client.go
-- [ ] Register `/definition` endpoint
+- [ ] `ZeroAllocFileContentStore` struct no longer exists
+- [ ] `file_content_store_zero_alloc.go` deleted
+- [ ] No compilation errors across the project
+- [ ] All zero-alloc tests preserved but test the base FileContentStore
+- [ ] `go test ./internal/core/...` passes
+- [ ] `go test ./internal/search/...` passes
 
-**Context:** The `def` command needs this to find where symbols are defined.
+**Context:** After Tasks 1 and 2, this struct has no consumers. Its methods live on FileContentStore. Clean deletion.
 
 ---
 
-## Task 4: Add Missing Server Endpoints - References
+## Task 4: Run full test suite and verify no regressions
 **Priority:** High
-**Scope:** internal/server/server.go, internal/server/client.go, internal/server/types.go (3 files)
-**Description:** Add `/references` endpoint to find symbol references.
+**Scope:** all packages
+
+**Description:** Run the complete test suite to verify no regressions from the consolidation. Run: `go test ./... -count=1 -timeout 300s`. Fix any compilation or test failures. Verify the workflow scenario tests still pass. Grep the entire codebase to confirm no references to ZeroAllocFileContentStore remain (except possibly in git history comments).
 
 **Acceptance Criteria:**
-- [ ] Add `ReferencesRequest` and `ReferencesResponse` types
-- [ ] Add `handleReferences` handler that finds all references
-- [ ] Add `GetReferences` method to client.go
-- [ ] Register `/references` endpoint
+- [ ] `go test ./...` passes with zero failures
+- [ ] No new compilation warnings
+- [ ] Workflow scenario tests pass (`go test ./internal/mcp/workflow_scenarios/... -count=1 -timeout 300s`)
+- [ ] `grep -r ZeroAllocFileContentStore internal/` returns zero results
+- [ ] No dead imports referencing removed types
 
-**Context:** The `refs` command needs this to find where symbols are used.
-
----
-
-## Task 5: Add Missing Server Endpoints - Tree
-**Priority:** Medium
-**Scope:** internal/server/server.go, internal/server/client.go, internal/server/types.go (3 files)
-**Description:** Add `/tree` endpoint to generate file/symbol tree view.
-
-**Acceptance Criteria:**
-- [ ] Add `TreeRequest` and `TreeResponse` types
-- [ ] Add `handleTree` handler that generates tree output
-- [ ] Add `GetTree` method to client.go
-- [ ] Register `/tree` endpoint
-
-**Context:** The `tree` command needs this to show project structure.
-
----
-
-## Task 6: Refactor searchCommand to Use Server
-**Priority:** High
-**Scope:** cmd/lci/search.go (1 file)
-**Description:** Refactor `searchCommand` to use server client instead of local indexer.
-
-**Acceptance Criteria:**
-- [ ] Call `ensureServerRunning(cfg)` at start
-- [ ] Use `client.Search()` instead of local search
-- [ ] Remove references to local indexer
-- [ ] Maintain same output format
-
-**Context:** Currently uses app.Metadata["indexer"] which is the local indexer.
-
----
-
-## Task 7: Refactor definitionCommand to Use Server
-**Priority:** High
-**Scope:** cmd/lci/main.go (definitionCommand function)
-**Description:** Refactor `definitionCommand` to use the new server `/definition` endpoint.
-
-**Acceptance Criteria:**
-- [ ] Call `ensureServerRunning(cfg)` at start
-- [ ] Use `client.GetDefinition()` instead of local search
-- [ ] Remove references to local indexer
-- [ ] Maintain same output format
-
-**Context:** Lines ~1114-1135 in main.go
-
----
-
-## Task 8: Refactor referencesCommand to Use Server
-**Priority:** High
-**Scope:** cmd/lci/main.go (referencesCommand function)
-**Description:** Refactor `referencesCommand` to use the new server `/references` endpoint.
-
-**Acceptance Criteria:**
-- [ ] Call `ensureServerRunning(cfg)` at start
-- [ ] Use `client.GetReferences()` instead of local search
-- [ ] Remove references to local indexer
-- [ ] Maintain same output format
-
-**Context:** Lines ~1136-1167 in main.go
-
----
-
-## Task 9: Refactor treeCommand to Use Server
-**Priority:** Medium
-**Scope:** cmd/lci/main.go (treeCommand function)
-**Description:** Refactor `treeCommand` to use the new server `/tree` endpoint.
-
-**Acceptance Criteria:**
-- [ ] Call `ensureServerRunning(cfg)` at start
-- [ ] Use `client.GetTree()` instead of local indexer
-- [ ] Remove references to local indexer
-- [ ] Maintain same output format
-
-**Context:** Lines ~1183-1233 in main.go
-
----
-
-## Task 10: Add Client Stats Method and Refactor statsCommand
-**Priority:** High
-**Scope:** internal/server/client.go, cmd/lci/status.go (2 files)
-**Description:** Add `GetStats` method to client and refactor status command.
-
-**Acceptance Criteria:**
-- [ ] Add `GetStats()` method to client.go
-- [ ] Refactor statusCommand to use server stats
-- [ ] Remove local indexer stats access
-- [ ] Ensure server shows accurate file/symbol counts
-
-**Context:** The status command currently uses local indexer which shows incorrect counts.
-
----
-
-## Task 11: Update Integration Tests
-**Priority:** High
-**Scope:** internal/server/server_integration_test.go, tests/search-comparison/*.go (3-4 files)
-**Description:** Update tests to verify server-only architecture works correctly.
-
-**Acceptance Criteria:**
-- [ ] Add tests for new endpoints (stats, definition, references, tree)
-- [ ] Verify CLI commands work without local indexing
-- [ ] Ensure search-comparison tests pass
-- [ ] Test that "Indexed 0 files" message no longer appears for server commands
-
-**Context:** Tests should verify the architectural change is complete.
-
----
-
-## Task 12: Clean Up Unused Code
-**Priority:** Low
-**Scope:** cmd/lci/main.go, internal/indexing/*.go (2-3 files)
-**Description:** Remove any orphaned local indexing code that's no longer needed.
-
-**Acceptance Criteria:**
-- [ ] Remove unused indexer creation in Before hook
-- [ ] Clean up app.Metadata["indexer"] if no longer used
-- [ ] Remove any dead code paths
-- [ ] Ensure no duplicate indexing code remains
-
-**Context:** Final cleanup after all commands are refactored.
-
----
-
-## Summary
-- **Total Tasks:** 12
-- **High Priority:** 9
-- **Medium Priority:** 2
-- **Low Priority:** 1
-- **Estimated Files Changed:** ~10-15 files
+**Context:** This is the verification task. The baseline workflow test suite took ~70s total with all scenarios passing.

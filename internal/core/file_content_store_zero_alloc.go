@@ -7,40 +7,13 @@ import (
 	"unicode/utf8"
 )
 
-// ZeroAllocFileContentStore extends FileContentStore with zero-allocation string operations
-// This provides all the helper methods needed for zero-allocation string processing
-type ZeroAllocFileContentStore struct {
-	*FileContentStore // Embed existing functionality
-}
-
-// NewZeroAllocFileContentStore creates a new zero-allocation file content store
-func NewZeroAllocFileContentStore() *ZeroAllocFileContentStore {
-	return &ZeroAllocFileContentStore{
-		FileContentStore: NewFileContentStore(),
-	}
-}
-
-// NewZeroAllocFileContentStoreFromStore creates a zero-allocation file content store from an existing store
-func NewZeroAllocFileContentStoreFromStore(store *FileContentStore) *ZeroAllocFileContentStore {
-	return &ZeroAllocFileContentStore{
-		FileContentStore: store,
-	}
-}
-
-// NewZeroAllocFileContentStoreWithLimit creates a new zero-allocation file content store with memory limit
-func NewZeroAllocFileContentStoreWithLimit(maxMemoryBytes int64) *ZeroAllocFileContentStore {
-	return &ZeroAllocFileContentStore{
-		FileContentStore: NewFileContentStoreWithLimit(maxMemoryBytes),
-	}
-}
-
 // ============================================================================
 // ZERO-ALLOCATION GETTER METHODS
 // ============================================================================
 
 // GetZeroAllocStringRef returns a ZeroAllocStringRef without any allocation
-func (zafcs *ZeroAllocFileContentStore) GetZeroAllocStringRef(ref types.StringRef) types.ZeroAllocStringRef {
-	if content, ok := zafcs.GetContent(ref.FileID); ok {
+func (fcs *FileContentStore) GetZeroAllocStringRef(ref types.StringRef) types.ZeroAllocStringRef {
+	if content, ok := fcs.GetContent(ref.FileID); ok {
 		end := ref.Offset + ref.Length
 		if ref.Offset < uint32(len(content)) && end <= uint32(len(content)) {
 			return types.ZeroAllocStringRef{
@@ -56,19 +29,19 @@ func (zafcs *ZeroAllocFileContentStore) GetZeroAllocStringRef(ref types.StringRe
 }
 
 // GetZeroAllocLine returns a ZeroAllocStringRef for a specific line without allocation
-func (zafcs *ZeroAllocFileContentStore) GetZeroAllocLine(fileID types.FileID, lineNum int) types.ZeroAllocStringRef {
-	if ref, ok := zafcs.GetLine(fileID, lineNum); ok {
-		return zafcs.GetZeroAllocStringRef(ref)
+func (fcs *FileContentStore) GetZeroAllocLine(fileID types.FileID, lineNum int) types.ZeroAllocStringRef {
+	if ref, ok := fcs.GetLine(fileID, lineNum); ok {
+		return fcs.GetZeroAllocStringRef(ref)
 	}
 	return types.EmptyZeroAllocStringRef
 }
 
 // GetZeroAllocLines returns ZeroAllocStringRefs for a range of lines without allocation
 // Parameters: startLine (0-indexed), count (number of lines to return)
-func (zafcs *ZeroAllocFileContentStore) GetZeroAllocLines(fileID types.FileID, startLine, count int) []types.ZeroAllocStringRef {
-	if content, ok := zafcs.GetContent(fileID); ok {
+func (fcs *FileContentStore) GetZeroAllocLines(fileID types.FileID, startLine, count int) []types.ZeroAllocStringRef {
+	if content, ok := fcs.GetContent(fileID); ok {
 		// Get line offsets
-		lineOffsets := zafcs.getLineOffsets(fileID)
+		lineOffsets := fcs.getZeroAllocLineOffsets(fileID)
 		if lineOffsets == nil || len(lineOffsets) == 0 {
 			return nil
 		}
@@ -127,10 +100,10 @@ func (zafcs *ZeroAllocFileContentStore) GetZeroAllocLines(fileID types.FileID, s
 }
 
 // GetZeroAllocContextLines returns ZeroAllocStringRefs for context lines without allocation
-func (zafcs *ZeroAllocFileContentStore) GetZeroAllocContextLines(fileID types.FileID, lineNum, before, after int) []types.ZeroAllocStringRef {
+func (fcs *FileContentStore) GetZeroAllocContextLines(fileID types.FileID, lineNum, before, after int) []types.ZeroAllocStringRef {
 	start := lineNum - before
 	count := before + 1 + after // before lines + match line + after lines
-	return zafcs.GetZeroAllocLines(fileID, start, count)
+	return fcs.GetZeroAllocLines(fileID, start, count)
 }
 
 // ============================================================================
@@ -138,18 +111,18 @@ func (zafcs *ZeroAllocFileContentStore) GetZeroAllocContextLines(fileID types.Fi
 // ============================================================================
 
 // SearchInLine searches for a pattern in a specific line without allocation
-func (zafcs *ZeroAllocFileContentStore) SearchInLine(fileID types.FileID, lineNum int, pattern string) bool {
-	lineRef := zafcs.GetZeroAllocLine(fileID, lineNum)
+func (fcs *FileContentStore) SearchInLine(fileID types.FileID, lineNum int, pattern string) bool {
+	lineRef := fcs.GetZeroAllocLine(fileID, lineNum)
 	return lineRef.Contains(pattern)
 }
 
 // SearchInLines searches for a pattern in multiple lines without allocation
-func (zafcs *ZeroAllocFileContentStore) SearchInLines(fileID types.FileID, startLine, endLine int, pattern string) []int {
+func (fcs *FileContentStore) SearchInLines(fileID types.FileID, startLine, endLine int, pattern string) []int {
 	count := endLine - startLine
 	if count <= 0 {
 		return nil
 	}
-	lines := zafcs.GetZeroAllocLines(fileID, startLine, count)
+	lines := fcs.GetZeroAllocLines(fileID, startLine, count)
 	var matches []int
 
 	for i, lineRef := range lines {
@@ -162,12 +135,12 @@ func (zafcs *ZeroAllocFileContentStore) SearchInLines(fileID types.FileID, start
 }
 
 // SearchLinesWithAnyPrefix finds lines that start with any of the given prefixes without allocation
-func (zafcs *ZeroAllocFileContentStore) SearchLinesWithAnyPrefix(fileID types.FileID, startLine, endLine int, prefixes ...string) []int {
+func (fcs *FileContentStore) SearchLinesWithAnyPrefix(fileID types.FileID, startLine, endLine int, prefixes ...string) []int {
 	count := endLine - startLine
 	if count <= 0 {
 		return nil
 	}
-	lines := zafcs.GetZeroAllocLines(fileID, startLine, count)
+	lines := fcs.GetZeroAllocLines(fileID, startLine, count)
 	var matches []int
 
 	for i, lineRef := range lines {
@@ -180,12 +153,12 @@ func (zafcs *ZeroAllocFileContentStore) SearchLinesWithAnyPrefix(fileID types.Fi
 }
 
 // SearchLinesWithAnySuffix finds lines that end with any of the given suffixes without allocation
-func (zafcs *ZeroAllocFileContentStore) SearchLinesWithAnySuffix(fileID types.FileID, startLine, endLine int, suffixes ...string) []int {
+func (fcs *FileContentStore) SearchLinesWithAnySuffix(fileID types.FileID, startLine, endLine int, suffixes ...string) []int {
 	count := endLine - startLine
 	if count <= 0 {
 		return nil
 	}
-	lines := zafcs.GetZeroAllocLines(fileID, startLine, count)
+	lines := fcs.GetZeroAllocLines(fileID, startLine, count)
 	var matches []int
 
 	for i, lineRef := range lines {
@@ -202,7 +175,7 @@ func (zafcs *ZeroAllocFileContentStore) SearchLinesWithAnySuffix(fileID types.Fi
 // ============================================================================
 
 // TrimWhitespaceLines removes leading/trailing whitespace from lines without allocation
-func (zafcs *ZeroAllocFileContentStore) TrimWhitespaceLines(lines []types.ZeroAllocStringRef) []types.ZeroAllocStringRef {
+func (fcs *FileContentStore) TrimWhitespaceLines(lines []types.ZeroAllocStringRef) []types.ZeroAllocStringRef {
 	result := make([]types.ZeroAllocStringRef, 0, len(lines))
 	for _, line := range lines {
 		trimmed := line.TrimSpace()
@@ -214,7 +187,7 @@ func (zafcs *ZeroAllocFileContentStore) TrimWhitespaceLines(lines []types.ZeroAl
 }
 
 // FilterEmptyLines removes empty lines without allocation
-func (zafcs *ZeroAllocFileContentStore) FilterEmptyLines(lines []types.ZeroAllocStringRef) []types.ZeroAllocStringRef {
+func (fcs *FileContentStore) FilterEmptyLines(lines []types.ZeroAllocStringRef) []types.ZeroAllocStringRef {
 	result := make([]types.ZeroAllocStringRef, 0, len(lines))
 	for _, line := range lines {
 		if !line.IsEmptyString() {
@@ -225,7 +198,7 @@ func (zafcs *ZeroAllocFileContentStore) FilterEmptyLines(lines []types.ZeroAlloc
 }
 
 // FilterCommentLines removes comment lines without allocation
-func (zafcs *ZeroAllocFileContentStore) FilterCommentLines(lines []types.ZeroAllocStringRef, commentPrefixes ...string) []types.ZeroAllocStringRef {
+func (fcs *FileContentStore) FilterCommentLines(lines []types.ZeroAllocStringRef, commentPrefixes ...string) []types.ZeroAllocStringRef {
 	if len(commentPrefixes) == 0 {
 		commentPrefixes = []string{"//", "#", "/*", "*", "*/"}
 	}
@@ -245,7 +218,7 @@ func (zafcs *ZeroAllocFileContentStore) FilterCommentLines(lines []types.ZeroAll
 // ============================================================================
 
 // ExtractFunctionName attempts to extract a function name from a line without allocation
-func (zafcs *ZeroAllocFileContentStore) ExtractFunctionName(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) ExtractFunctionName(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
 	trimmed := lineRef.TrimSpace()
 
 	// Common function patterns
@@ -294,7 +267,7 @@ func (zafcs *ZeroAllocFileContentStore) ExtractFunctionName(lineRef types.ZeroAl
 }
 
 // ExtractVariableName attempts to extract a variable name from a line without allocation
-func (zafcs *ZeroAllocFileContentStore) ExtractVariableName(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) ExtractVariableName(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
 	trimmed := lineRef.TrimSpace()
 
 	// Common variable patterns
@@ -339,7 +312,7 @@ func (zafcs *ZeroAllocFileContentStore) ExtractVariableName(lineRef types.ZeroAl
 }
 
 // ExtractImportPath attempts to extract an import path from a line without allocation
-func (zafcs *ZeroAllocFileContentStore) ExtractImportPath(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) ExtractImportPath(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
 	trimmed := lineRef.TrimSpace()
 
 	// Common import patterns
@@ -380,12 +353,12 @@ func (zafcs *ZeroAllocFileContentStore) ExtractImportPath(lineRef types.ZeroAllo
 // ============================================================================
 
 // ProcessLinesInBulk processes multiple lines with a function without allocation
-func (zafcs *ZeroAllocFileContentStore) ProcessLinesInBulk(fileID types.FileID, startLine, endLine int, processor func(types.ZeroAllocStringRef) bool) []int {
+func (fcs *FileContentStore) ProcessLinesInBulk(fileID types.FileID, startLine, endLine int, processor func(types.ZeroAllocStringRef) bool) []int {
 	count := endLine - startLine
 	if count <= 0 {
 		return nil
 	}
-	lines := zafcs.GetZeroAllocLines(fileID, startLine, count)
+	lines := fcs.GetZeroAllocLines(fileID, startLine, count)
 	var results []int
 
 	for i, line := range lines {
@@ -398,21 +371,21 @@ func (zafcs *ZeroAllocFileContentStore) ProcessLinesInBulk(fileID types.FileID, 
 }
 
 // FindAllLinesWithPattern finds all lines containing a pattern without allocation
-func (zafcs *ZeroAllocFileContentStore) FindAllLinesWithPattern(fileID types.FileID, pattern string) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchInLines(fileID, 0, lineCount, pattern)
+func (fcs *FileContentStore) FindAllLinesWithPattern(fileID types.FileID, pattern string) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchInLines(fileID, 0, lineCount, pattern)
 }
 
 // FindAllLinesWithPrefix finds all lines starting with a prefix without allocation
-func (zafcs *ZeroAllocFileContentStore) FindAllLinesWithPrefix(fileID types.FileID, prefix string) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount, prefix)
+func (fcs *FileContentStore) FindAllLinesWithPrefix(fileID types.FileID, prefix string) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount, prefix)
 }
 
 // FindAllLinesWithSuffix finds all lines ending with a suffix without allocation
-func (zafcs *ZeroAllocFileContentStore) FindAllLinesWithSuffix(fileID types.FileID, suffix string) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchLinesWithAnySuffix(fileID, 0, lineCount, suffix)
+func (fcs *FileContentStore) FindAllLinesWithSuffix(fileID types.FileID, suffix string) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchLinesWithAnySuffix(fileID, 0, lineCount, suffix)
 }
 
 // ============================================================================
@@ -420,7 +393,7 @@ func (zafcs *ZeroAllocFileContentStore) FindAllLinesWithSuffix(fileID types.File
 // ============================================================================
 
 // LinesToJSON converts lines to JSON without intermediate string allocation
-func (zafcs *ZeroAllocFileContentStore) LinesToJSON(lines []types.ZeroAllocStringRef) ([]byte, error) {
+func (fcs *FileContentStore) LinesToJSON(lines []types.ZeroAllocStringRef) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString("[")
 
@@ -441,9 +414,9 @@ func (zafcs *ZeroAllocFileContentStore) LinesToJSON(lines []types.ZeroAllocStrin
 }
 
 // ContextToJSON converts context lines to JSON without intermediate string allocation
-func (zafcs *ZeroAllocFileContentStore) ContextToJSON(fileID types.FileID, lineNum, before, after int) ([]byte, error) {
-	lines := zafcs.GetZeroAllocContextLines(fileID, lineNum, before, after)
-	return zafcs.LinesToJSON(lines)
+func (fcs *FileContentStore) ContextToJSON(fileID types.FileID, lineNum, before, after int) ([]byte, error) {
+	lines := fcs.GetZeroAllocContextLines(fileID, lineNum, before, after)
+	return fcs.LinesToJSON(lines)
 }
 
 // ============================================================================
@@ -458,8 +431,8 @@ type SearchResults struct {
 }
 
 // FindWithContext finds all matches and provides context without allocation
-func (zafcs *ZeroAllocFileContentStore) FindWithContext(fileID types.FileID, pattern string, contextLines int) SearchResults {
-	matches := zafcs.FindAllLinesWithPattern(fileID, pattern)
+func (fcs *FileContentStore) FindWithContext(fileID types.FileID, pattern string, contextLines int) SearchResults {
+	matches := fcs.FindAllLinesWithPattern(fileID, pattern)
 	results := SearchResults{
 		LineNumbers: matches,
 		Lines:       make([]types.ZeroAllocStringRef, len(matches)),
@@ -467,9 +440,9 @@ func (zafcs *ZeroAllocFileContentStore) FindWithContext(fileID types.FileID, pat
 	}
 
 	for i, lineNum := range matches {
-		results.Lines[i] = zafcs.GetZeroAllocLine(fileID, lineNum)
+		results.Lines[i] = fcs.GetZeroAllocLine(fileID, lineNum)
 		if contextLines > 0 {
-			results.Context[lineNum] = zafcs.GetZeroAllocContextLines(fileID, lineNum, contextLines, contextLines)
+			results.Context[lineNum] = fcs.GetZeroAllocContextLines(fileID, lineNum, contextLines, contextLines)
 		}
 	}
 
@@ -480,10 +453,9 @@ func (zafcs *ZeroAllocFileContentStore) FindWithContext(fileID types.FileID, pat
 // HELPER METHODS
 // ============================================================================
 
-// getLineOffsets returns line offsets for a file (internal helper)
-func (zafcs *ZeroAllocFileContentStore) getLineOffsets(fileID types.FileID) []uint32 {
-	// Use snapshot from embedded FileContentStore
-	snapshot := zafcs.FileContentStore.snapshot.Load().(*FileContentSnapshot)
+// getZeroAllocLineOffsets returns line offsets for a file (internal helper)
+func (fcs *FileContentStore) getZeroAllocLineOffsets(fileID types.FileID) []uint32 {
+	snapshot := fcs.snapshot.Load().(*FileContentSnapshot)
 	if fcVal, ok := snapshot.files.Load(fileID); ok {
 		return fcVal.(*FileContent).LineOffsets
 	}
@@ -491,23 +463,23 @@ func (zafcs *ZeroAllocFileContentStore) getLineOffsets(fileID types.FileID) []ui
 }
 
 // IsCommentLine checks if a line is a comment without allocation
-func (zafcs *ZeroAllocFileContentStore) IsCommentLine(lineRef types.ZeroAllocStringRef) bool {
+func (fcs *FileContentStore) IsCommentLine(lineRef types.ZeroAllocStringRef) bool {
 	trimmed := lineRef.TrimSpace()
 	return trimmed.HasAnyPrefix("//", "#", "/*", "*", "*/", "<!--", "-->")
 }
 
 // IsEmptyLine checks if a line is empty or contains only whitespace without allocation
-func (zafcs *ZeroAllocFileContentStore) IsEmptyLine(lineRef types.ZeroAllocStringRef) bool {
+func (fcs *FileContentStore) IsEmptyLine(lineRef types.ZeroAllocStringRef) bool {
 	return lineRef.IsEmptyString() || lineRef.TrimSpace().IsEmptyString()
 }
 
 // HasCodeContent checks if a line contains actual code (not just comments/whitespace) without allocation
-func (zafcs *ZeroAllocFileContentStore) HasCodeContent(lineRef types.ZeroAllocStringRef) bool {
-	return !zafcs.IsEmptyLine(lineRef) && !zafcs.IsCommentLine(lineRef)
+func (fcs *FileContentStore) HasCodeContent(lineRef types.ZeroAllocStringRef) bool {
+	return !fcs.IsEmptyLine(lineRef) && !fcs.IsCommentLine(lineRef)
 }
 
 // ExtractBraceContent extracts content between braces without allocation
-func (zafcs *ZeroAllocFileContentStore) ExtractBraceContent(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) ExtractBraceContent(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
 	if openIdx := lineRef.Index("{"); openIdx >= 0 {
 		if closeIdx := lineRef.Index("}"); closeIdx > openIdx {
 			return lineRef.Substring(openIdx+1, closeIdx)
@@ -517,7 +489,7 @@ func (zafcs *ZeroAllocFileContentStore) ExtractBraceContent(lineRef types.ZeroAl
 }
 
 // ExtractParenContent extracts content between parentheses without allocation
-func (zafcs *ZeroAllocFileContentStore) ExtractParenContent(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) ExtractParenContent(lineRef types.ZeroAllocStringRef) types.ZeroAllocStringRef {
 	if openIdx := lineRef.Index("("); openIdx >= 0 {
 		if closeIdx := lineRef.Index(")"); closeIdx > openIdx {
 			return lineRef.Substring(openIdx+1, closeIdx)
@@ -531,30 +503,30 @@ func (zafcs *ZeroAllocFileContentStore) ExtractParenContent(lineRef types.ZeroAl
 // ============================================================================
 
 // FindFunctionDefinitions finds all function definition lines without allocation
-func (zafcs *ZeroAllocFileContentStore) FindFunctionDefinitions(fileID types.FileID) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
+func (fcs *FileContentStore) FindFunctionDefinitions(fileID types.FileID) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
 		"func ", "function ", "def ", "void ", "int ", "string ", "bool ")
 }
 
 // FindVariableDeclarations finds all variable declaration lines without allocation
-func (zafcs *ZeroAllocFileContentStore) FindVariableDeclarations(fileID types.FileID) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
+func (fcs *FileContentStore) FindVariableDeclarations(fileID types.FileID) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
 		"var ", "let ", "const ", "string ", "int ", "bool ", "float ")
 }
 
 // FindImportStatements finds all import statement lines without allocation
-func (zafcs *ZeroAllocFileContentStore) FindImportStatements(fileID types.FileID) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
+func (fcs *FileContentStore) FindImportStatements(fileID types.FileID) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
 		"import ", "from ", "#include ", "require ", "use ")
 }
 
 // FindClassDefinitions finds all class definition lines without allocation
-func (zafcs *ZeroAllocFileContentStore) FindClassDefinitions(fileID types.FileID) []int {
-	lineCount := zafcs.GetLineCount(fileID)
-	return zafcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
+func (fcs *FileContentStore) FindClassDefinitions(fileID types.FileID) []int {
+	lineCount := fcs.GetLineCount(fileID)
+	return fcs.SearchLinesWithAnyPrefix(fileID, 0, lineCount,
 		"class ", "interface ", "struct ", "type ", "enum ")
 }
 
@@ -563,7 +535,7 @@ func (zafcs *ZeroAllocFileContentStore) FindClassDefinitions(fileID types.FileID
 // ============================================================================
 
 // RemoveCommonPrefix removes common prefix from multiple lines without allocation
-func (zafcs *ZeroAllocFileContentStore) RemoveCommonPrefix(lines []types.ZeroAllocStringRef) []types.ZeroAllocStringRef {
+func (fcs *FileContentStore) RemoveCommonPrefix(lines []types.ZeroAllocStringRef) []types.ZeroAllocStringRef {
 	if len(lines) == 0 {
 		return lines
 	}
@@ -571,7 +543,7 @@ func (zafcs *ZeroAllocFileContentStore) RemoveCommonPrefix(lines []types.ZeroAll
 	// Find common prefix
 	commonPrefix := lines[0]
 	for i := 1; i < len(lines); i++ {
-		commonPrefix = zafcs.findCommonPrefix(commonPrefix, lines[i])
+		commonPrefix = fcs.findCommonPrefix(commonPrefix, lines[i])
 		if commonPrefix.IsEmpty() {
 			break
 		}
@@ -595,7 +567,7 @@ func (zafcs *ZeroAllocFileContentStore) RemoveCommonPrefix(lines []types.ZeroAll
 }
 
 // findCommonPrefix finds common prefix between two ZeroAllocStringRefs
-func (zafcs *ZeroAllocFileContentStore) findCommonPrefix(a, b types.ZeroAllocStringRef) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) findCommonPrefix(a, b types.ZeroAllocStringRef) types.ZeroAllocStringRef {
 	minLen := a.Len()
 	if b.Len() < minLen {
 		minLen = b.Len()
@@ -614,12 +586,12 @@ func (zafcs *ZeroAllocFileContentStore) findCommonPrefix(a, b types.ZeroAllocStr
 // ============================================================================
 
 // CountRunes counts Unicode runes in the reference without allocation
-func (zafcs *ZeroAllocFileContentStore) CountRunes(ref types.ZeroAllocStringRef) int {
+func (fcs *FileContentStore) CountRunes(ref types.ZeroAllocStringRef) int {
 	return utf8.RuneCount(ref.Bytes())
 }
 
 // ExtractRunes extracts Unicode runes within a range without allocation
-func (zafcs *ZeroAllocFileContentStore) ExtractRunes(ref types.ZeroAllocStringRef, startRune, endRune int) types.ZeroAllocStringRef {
+func (fcs *FileContentStore) ExtractRunes(ref types.ZeroAllocStringRef, startRune, endRune int) types.ZeroAllocStringRef {
 	bytes := ref.Bytes()
 
 	// Convert rune positions to byte positions
