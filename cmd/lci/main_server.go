@@ -12,6 +12,7 @@ import (
 	"github.com/standardbeagle/lci/internal/config"
 	"github.com/standardbeagle/lci/internal/indexing"
 	"github.com/standardbeagle/lci/internal/server"
+	"github.com/standardbeagle/lci/internal/version"
 	"github.com/urfave/cli/v2"
 )
 
@@ -118,7 +119,18 @@ func ensureServerRunning(cfg *config.Config) (*server.Client, error) {
 
 	// Check if server is already running for this project
 	if client.IsServerRunning() {
-		return client, nil
+		// Verify the running server was built from the same binary
+		ping, err := client.Ping()
+		if err == nil && ping.BuildID != "" && ping.BuildID != version.BuildID() {
+			fmt.Fprintf(os.Stderr, "Stale server detected (build %s != %s), restarting...\n",
+				ping.BuildID, version.BuildID())
+			_ = client.Shutdown(false)
+			time.Sleep(500 * time.Millisecond)
+			os.Remove(socketPath)
+			// Fall through to start new server
+		} else {
+			return client, nil
+		}
 	}
 
 	// Server not running - start it in background

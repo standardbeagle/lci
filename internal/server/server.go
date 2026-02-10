@@ -27,18 +27,19 @@ import (
 
 // IndexServer manages a persistent index that can be shared between CLI and MCP
 type IndexServer struct {
-	indexer        *indexing.MasterIndex
-	searchEngine   *search.Engine
-	cfg            *config.Config
-	listener       net.Listener
-	server         *http.Server
-	startTime      time.Time
-	shutdownChan   chan struct{}
-	wg             sync.WaitGroup
-	mu             sync.RWMutex
-	running        bool
-	indexingActive bool
-	socketPath     string // Custom socket path (empty uses default)
+	indexer          *indexing.MasterIndex
+	searchEngine     *search.Engine
+	cfg              *config.Config
+	listener         net.Listener
+	server           *http.Server
+	startTime        time.Time
+	shutdownChan     chan struct{}
+	wg               sync.WaitGroup
+	mu               sync.RWMutex
+	running          bool
+	indexingActive   bool
+	socketPath       string // Custom socket path (empty uses default)
+	BuildIDOverride  string // Override build ID for testing (empty uses version.BuildID())
 }
 
 // NewIndexServer creates a new persistent index server
@@ -358,9 +359,14 @@ func (s *IndexServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 // handlePing responds to health check requests
 func (s *IndexServer) handlePing(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(s.startTime).Seconds()
+	bid := s.BuildIDOverride
+	if bid == "" {
+		bid = version.BuildID()
+	}
 	response := PingResponse{
 		Uptime:  uptime,
 		Version: version.Version,
+		BuildID: bid,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

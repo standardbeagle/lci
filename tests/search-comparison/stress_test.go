@@ -88,9 +88,9 @@ func TestGrepPerformanceComparison(t *testing.T) {
 
 			t.Logf("Pattern: %q - %s", tc.Pattern, tc.Expected)
 
-			// Benchmark lci grep
+			// Benchmark lci grep (in-process)
 			lciStart := time.Now()
-			lciResults := runLCIGrep(t, absFixtureDir, tc.Pattern)
+			lciResults := getOrCreateIndex(t, absFixtureDir).search(t, tc.Pattern)
 			lciDuration := time.Since(lciStart)
 			t.Logf("lci grep: %d results in %v", len(lciResults), lciDuration)
 
@@ -141,10 +141,11 @@ func TestLargePatternSet(t *testing.T) {
 
 	t.Logf("Testing sequential search of %d patterns", len(patterns))
 
+	idx := getOrCreateIndex(t, absFixtureDir)
 	lciStart := time.Now()
 	lciTotalResults := 0
 	for _, pattern := range patterns {
-		results := runLCIGrep(t, absFixtureDir, pattern)
+		results := idx.search(t, pattern)
 		lciTotalResults += len(results)
 	}
 	lciDuration := time.Since(lciStart)
@@ -236,8 +237,8 @@ func TestEdgeCasePatterns(t *testing.T) {
 		t.Run(tc.Name, func(t *testing.T) {
 			t.Logf("Pattern: %q - %s", tc.Pattern, tc.Expected)
 
-			// Test lci grep
-			lciResults := runLCIGrep(t, absFixtureDir, tc.Pattern)
+			// Test lci grep (in-process)
+			lciResults := getOrCreateIndex(t, absFixtureDir).search(t, tc.Pattern)
 			t.Logf("lci grep: %d results", len(lciResults))
 
 			// Test standard grep

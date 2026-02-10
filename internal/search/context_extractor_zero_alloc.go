@@ -1,6 +1,8 @@
 package search
 
 import (
+	"bytes"
+
 	"github.com/standardbeagle/lci/internal/core"
 	"github.com/standardbeagle/lci/internal/types"
 )
@@ -182,14 +184,13 @@ func (zce *ZeroAllocContextExtractor) findFunctionBoundariesZeroAlloc(fileID typ
 
 	for end < totalLines {
 		lineRef := zce.store.GetZeroAllocLine(fileID, end)
-		lineStr := lineRef.String()
 
-		// Count braces (simple heuristic - doesn't handle strings/comments perfectly)
-		for _, ch := range lineStr {
-			if ch == '{' {
+		// Count braces using direct byte iteration — braces are single-byte ASCII
+		for _, b := range lineRef.Bytes() {
+			if b == '{' {
 				braceDepth++
 				functionStarted = true
-			} else if ch == '}' {
+			} else if b == '}' {
 				braceDepth--
 				// When we close the function's opening brace, we found the end
 				if functionStarted && braceDepth == 0 {
@@ -389,21 +390,21 @@ func (zce *ZeroAllocContextExtractor) ExtractSimilarPatternsZeroAlloc(fileID typ
 			continue
 		}
 
-		// Check for similar patterns
+		// Check for similar patterns using direct byte comparison
 		trimmed := lineRef.TrimSpace()
-		targetStr := targetTrimmed.String()
-		trimmedStr := trimmed.String()
+		targetBytes := targetTrimmed.Bytes()
+		trimmedBytes := trimmed.Bytes()
 
 		// Similarity check with lower thresholds for better matches
 		minLen := 5 // Lower threshold from 10 to 5
-		if len(targetStr) >= minLen && len(trimmedStr) >= minLen {
-			prefixLen := contextMin(minLen, contextMin(len(targetStr), len(trimmedStr)))
-			suffixLen := contextMin(minLen, contextMin(len(targetStr), len(trimmedStr)))
+		if len(targetBytes) >= minLen && len(trimmedBytes) >= minLen {
+			prefixLen := contextMin(minLen, contextMin(len(targetBytes), len(trimmedBytes)))
+			suffixLen := contextMin(minLen, contextMin(len(targetBytes), len(trimmedBytes)))
 
 			// Match if similar prefix OR suffix (not requiring both)
-			hasSimilarPrefix := targetStr[:prefixLen] == trimmedStr[:prefixLen]
-			hasSimilarSuffix := len(targetStr) >= suffixLen && len(trimmedStr) >= suffixLen &&
-				targetStr[len(targetStr)-suffixLen:] == trimmedStr[len(trimmedStr)-suffixLen:]
+			hasSimilarPrefix := bytes.Equal(targetBytes[:prefixLen], trimmedBytes[:prefixLen])
+			hasSimilarSuffix := len(targetBytes) >= suffixLen && len(trimmedBytes) >= suffixLen &&
+				bytes.Equal(targetBytes[len(targetBytes)-suffixLen:], trimmedBytes[len(trimmedBytes)-suffixLen:])
 
 			if hasSimilarPrefix || hasSimilarSuffix {
 				similarPatterns = append(similarPatterns, lineRef)
@@ -430,9 +431,9 @@ func (zce *ZeroAllocContextExtractor) CalculatePatternUniquenessZeroAlloc(fileID
 			continue
 		}
 
-		// Simple similarity check
+		// Simple similarity check — compare byte slices directly
 		trimmed := lineRef.TrimSpace()
-		if trimmed.EqualString(trimmedPattern.String()) {
+		if trimmed.Equal(trimmedPattern) {
 			matchCount++
 		}
 	}

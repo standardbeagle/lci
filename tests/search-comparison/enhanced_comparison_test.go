@@ -427,8 +427,8 @@ func TestEnhancedGrepComparison(t *testing.T) {
 			absFixtureDir, err := filepath.Abs(fixtureDir)
 			require.NoError(t, err)
 
-			// Run all search tools
-			lciResults := runLCIGrep(t, absFixtureDir, tc.Pattern).Normalize()
+			// Run all search tools (in-process for lci)
+			lciResults := getOrCreateIndex(t, absFixtureDir).search(t, tc.Pattern).Normalize()
 			grepResults := runGrepSearch(t, absFixtureDir, tc.Pattern).Normalize()
 
 			var rgResults SearchResults
@@ -542,8 +542,8 @@ func TestCaseInsensitiveComparison(t *testing.T) {
 			absFixtureDir, err := filepath.Abs(fixtureDir)
 			require.NoError(t, err)
 
-			// Run case-insensitive searches
-			lciResults := runLCIGrepCaseInsensitive(t, absFixtureDir, tc.Pattern).Normalize()
+			// Run case-insensitive searches (in-process for lci)
+			lciResults := getOrCreateIndex(t, absFixtureDir).searchCaseInsensitive(t, tc.Pattern).Normalize()
 			grepResults := runGrepCaseInsensitive(t, absFixtureDir, tc.Pattern).Normalize()
 
 			t.Logf("Pattern: %q (case-insensitive)", tc.Pattern)

@@ -1712,15 +1712,103 @@ func (e *Engine) GetLineRange(fileInfo *types.FileInfo, startLine, endLine int) 
 	return result
 }
 
+// getLineRef returns a ZeroAllocStringRef for the given 1-based line number,
+// avoiding the string allocation that GetLine performs. Uses the same resolution
+// order as GetLine: FileInfo.LineOffsets → indexer offsets → linear scan.
+func (e *Engine) getLineRef(fileInfo *types.FileInfo, lineNum int) types.ZeroAllocStringRef {
+	if lineNum < 1 {
+		return types.EmptyZeroAllocStringRef
+	}
+
+	// Helper to build a ref from content + start/end byte offsets
+	makeRef := func(content []byte, start, end int) types.ZeroAllocStringRef {
+		if start >= len(content) || start > end {
+			return types.EmptyZeroAllocStringRef
+		}
+		if end > len(content) {
+			end = len(content)
+		}
+		return types.ZeroAllocStringRef{
+			Data:   content,
+			FileID: fileInfo.ID,
+			Offset: uint32(start),
+			Length: uint32(end - start),
+			Hash:   types.ComputeHash(content[start:end]),
+		}
+	}
+
+	// Path 1: FileInfo.LineOffsets ([]int, 0-based index, 1-based lineNum)
+	if len(fileInfo.LineOffsets) > 0 {
+		lineIdx := lineNum - 1
+		if lineIdx < 0 || lineIdx >= len(fileInfo.LineOffsets) {
+			return types.EmptyZeroAllocStringRef
+		}
+		start := fileInfo.LineOffsets[lineIdx]
+		end := len(fileInfo.Content)
+		if lineIdx+1 < len(fileInfo.LineOffsets) {
+			end = fileInfo.LineOffsets[lineIdx+1]
+			if end > start && fileInfo.Content[end-1] == '\n' {
+				end--
+			}
+		}
+		return makeRef(fileInfo.Content, start, end)
+	}
+
+	// Path 2: indexer offsets ([]uint32)
+	if offsets, ok := e.indexer.GetFileLineOffsets(fileInfo.ID); ok && len(offsets) > 0 {
+		content := fileInfo.Content
+		if len(content) == 0 {
+			if contentBytes, ok := e.indexer.GetFileContent(fileInfo.ID); ok {
+				content = contentBytes
+			}
+		}
+		if len(content) > 0 {
+			lineIdx := lineNum - 1
+			if lineIdx >= 0 && lineIdx < len(offsets) {
+				start := int(offsets[lineIdx])
+				end := len(content)
+				if lineIdx+1 < len(offsets) {
+					end = int(offsets[lineIdx+1])
+					if end > start && content[end-1] == '\n' {
+						end--
+					}
+				}
+				return makeRef(content, start, end)
+			}
+		}
+		return types.EmptyZeroAllocStringRef
+	}
+
+	// Path 3: linear scan fallback
+	content := fileInfo.Content
+	if len(content) == 0 {
+		return types.EmptyZeroAllocStringRef
+	}
+	currentLine := 1
+	start := 0
+	for i, b := range content {
+		if b == '\n' {
+			if currentLine == lineNum {
+				return makeRef(content, start, i)
+			}
+			currentLine++
+			start = i + 1
+		}
+	}
+	if currentLine == lineNum && start < len(content) {
+		return makeRef(content, start, len(content))
+	}
+	return types.EmptyZeroAllocStringRef
+}
+
 func (e *Engine) isInComment(fileInfo *types.FileInfo, line int) bool {
-	lineContent := e.GetLine(fileInfo, line)
-	if lineContent == "" {
+	lineRef := e.getLineRef(fileInfo, line)
+	if lineRef.IsEmpty() {
 		return false
 	}
 
-	trimmed := strings.TrimSpace(lineContent)
-	return strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") ||
-		strings.HasPrefix(trimmed, "/*") || strings.Contains(trimmed, "*"+"/") // Split to avoid parser confusion
+	trimmed := lineRef.TrimSpace()
+	return trimmed.HasAnyPrefix("//", "#", "/*") || trimmed.Contains("*/")
 }
 
 func (e *Engine) isExportedEnhancedSymbol(symbol *types.EnhancedSymbol, fileInfo *types.FileInfo) bool {
@@ -1736,11 +1824,9 @@ func (e *Engine) isExportedEnhancedSymbol(symbol *types.EnhancedSymbol, fileInfo
 
 	// Check for export keywords
 	if line := symbol.Line; line > 0 {
-		lineContent := e.GetLine(fileInfo, line)
-		if lineContent != "" {
-			return strings.Contains(lineContent, "export ") ||
-				strings.Contains(lineContent, "public ") ||
-				strings.Contains(lineContent, "pub ")
+		lineRef := e.getLineRef(fileInfo, line)
+		if !lineRef.IsEmpty() {
+			return lineRef.ContainsAny("export ", "public ", "pub ")
 		}
 	}
 
@@ -1758,12 +1844,11 @@ func (e *Engine) isMutableSymbol(symbol *types.EnhancedSymbol, fileInfo *types.F
 	}
 
 	if line > 0 {
-		lineContent := e.GetLine(fileInfo, line)
-		if lineContent != "" {
+		lineRef := e.getLineRef(fileInfo, line)
+		if !lineRef.IsEmpty() {
 			// Check for mutable variable declarations
-			return strings.Contains(lineContent, "var ") ||
-				strings.Contains(lineContent, "let ") ||
-				(!strings.Contains(lineContent, "const ") && !strings.Contains(lineContent, "final "))
+			return lineRef.ContainsAny("var ", "let ") ||
+				(!lineRef.ContainsAny("const ", "final "))
 		}
 	}
 
@@ -1777,10 +1862,11 @@ func (e *Engine) isGlobalSymbol(symbol *types.EnhancedSymbol, fileInfo *types.Fi
 	}
 	// Simple heuristic: global symbols are typically at the top level (less indentation)
 	if line := symbol.Line; line > 0 {
-		lineContent := e.GetLine(fileInfo, line)
-		if lineContent != "" {
-			indent := len(lineContent) - len(strings.TrimLeft(lineContent, " \t"))
-			return indent == 0 // No indentation = top level
+		lineRef := e.getLineRef(fileInfo, line)
+		if !lineRef.IsEmpty() {
+			trimmedLeft := lineRef.TrimLeft(" \t")
+			// No indentation = top level (no leading whitespace removed)
+			return lineRef.Len() == trimmedLeft.Len()
 		}
 	}
 

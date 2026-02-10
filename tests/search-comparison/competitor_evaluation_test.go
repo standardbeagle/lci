@@ -1,7 +1,6 @@
 package searchcomparison
 
 import (
-	"context"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -36,7 +35,7 @@ func TestCompetitorEvaluation(t *testing.T) {
 	t.Logf("Building persistent index for %s...", absFixtureDir)
 	indexStart := time.Now()
 	idx, cfg := setupPersistentIndex(t, absFixtureDir)
-	defer idx.Close()
+	// Index lifecycle managed by TestMain via indexCache — do not close here
 	indexDuration := time.Since(indexStart)
 	t.Logf("Index built in %v (one-time cost, excluded from search measurements)", indexDuration)
 
@@ -135,7 +134,7 @@ func TestCompetitorEvaluation_RepeatedSearches(t *testing.T) {
 	t.Logf("Building persistent index...")
 	indexStart := time.Now()
 	idx, cfg := setupPersistentIndex(t, absFixtureDir)
-	defer idx.Close()
+	// Index lifecycle managed by TestMain via indexCache — do not close here
 	indexBuildCost := time.Since(indexStart)
 	t.Logf("Index built in %v", indexBuildCost)
 
@@ -211,7 +210,7 @@ func TestCompetitorEvaluation_EdgeCases(t *testing.T) {
 
 	// Build persistent index
 	idx, cfg := setupPersistentIndex(t, absFixtureDir)
-	defer idx.Close()
+	// Index lifecycle managed by TestMain via indexCache — do not close here
 
 	edgeCases := []struct {
 		Name          string
@@ -303,62 +302,23 @@ func TestCompetitorEvaluation_EdgeCases(t *testing.T) {
 	}
 }
 
-// setupPersistentIndex creates a persistent index for testing (simulates MCP server)
+// setupPersistentIndex creates a persistent index for testing (simulates MCP server).
+// Delegates to the shared in-process index helpers for consistent config.
 func setupPersistentIndex(t *testing.T, projectRoot string) (*indexing.MasterIndex, *config.Config) {
 	t.Helper()
 
-	cfg := &config.Config{
-		Version: 1,
-		Project: config.Project{
-			Root: projectRoot,
-		},
-		Index: config.Index{
-			MaxFileSize:      10 * 1024 * 1024,
-			MaxTotalSizeMB:   500,
-			MaxFileCount:     10000,
-			FollowSymlinks:   false,
-			SmartSizeControl: true,
-		},
-		Performance: config.Performance{
-			MaxMemoryMB:   200,
-			MaxGoroutines: 4,
-		},
-		Search: config.Search{
-			MaxResults:         1000,
-			MaxContextLines:    5,
-			EnableFuzzy:        false,
-			MergeFileResults:   true,
-			EnsureCompleteStmt: false,
-		},
-		Include: []string{"**/*"},
-		Exclude: []string{
-			"**/node_modules/**",
-			"**/vendor/**",
-			"**/.git/**",
-		},
-	}
-
-	idx := indexing.NewMasterIndex(cfg)
-	ctx := context.Background()
-	err := idx.IndexDirectory(ctx, projectRoot)
-	require.NoError(t, err, "Failed to build persistent index")
-
-	stats := idx.GetStats()
-	fileCount, _ := stats["file_count"].(int)
-	symbolCount, _ := stats["symbol_count"].(int)
-	t.Logf("Indexed %d files, %d symbols", fileCount, symbolCount)
-
-	return idx, cfg
+	ipi := getOrCreateIndex(t, projectRoot)
+	return ipi.idx, ipi.cfg
 }
 
 // searchWithPersistentIndex performs a search on an existing index (EXCLUDING build cost)
-func searchWithPersistentIndex(t *testing.T, idx *indexing.MasterIndex, cfg *config.Config, pattern string) []searchtypes.GrepResult {
+func searchWithPersistentIndex(t *testing.T, idx *indexing.MasterIndex, _ *config.Config, pattern string) []searchtypes.GrepResult {
 	t.Helper()
 
 	opts := types.SearchOptions{
 		MaxResults:      100,
 		CaseInsensitive: true,
-		MaxContextLines: 0, // Minimal context for performance test
+		MaxContextLines: 0,
 	}
 
 	results, err := idx.SearchWithOptions(pattern, opts)

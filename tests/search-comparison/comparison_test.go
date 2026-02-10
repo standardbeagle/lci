@@ -454,8 +454,8 @@ func TestSearchComparison(t *testing.T) {
 				t.Skipf("Fixture directory not found: %s", absFixtureDir)
 			}
 
-			// Run all search tools
-			lciResults := runLCIGrep(t, absFixtureDir, tc.Pattern).Normalize()
+			// Run all search tools (in-process for lci, external for grep/rg)
+			lciResults := getOrCreateIndex(t, absFixtureDir).search(t, tc.Pattern).Normalize()
 			grepResults := runGrepSearch(t, absFixtureDir, tc.Pattern).Normalize()
 
 			var rgResults SearchResults
@@ -569,9 +569,9 @@ func TestBenchmarkSearchPerformance(t *testing.T) {
 	fixtureDir, err := filepath.Abs(getFixturePath("all"))
 	require.NoError(t, err)
 
-	// Benchmark lci grep (trigram search)
+	// Benchmark lci grep (in-process trigram search)
 	t.Run("lci-grep", func(t *testing.T) {
-		results := runLCIGrep(t, fixtureDir, pattern)
+		results := getOrCreateIndex(t, fixtureDir).search(t, pattern)
 		t.Logf("lci grep found %d results", len(results))
 	})
 

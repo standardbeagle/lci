@@ -70,6 +70,7 @@ type PingRequest struct{}
 type PingResponse struct {
 	Uptime  float64 `json:"uptime_seconds"`
 	Version string  `json:"version"`
+	BuildID string  `json:"build_id,omitempty"`
 }
 
 // ReindexRequest triggers a re-index
