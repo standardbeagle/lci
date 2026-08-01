@@ -2,6 +2,8 @@
 
 Lightning-fast code indexing and search for AI assistants.
 
+> **⚡ Active development has moved to [lci-cpp](https://github.com/standardbeagle/lci-cpp)** — the C++ implementation is the way forward, with docs at https://dev.standardbeagle.com/lci-cpp/. This Go implementation remains available but is not where new work lands.
+
 [![CI](https://github.com/standardbeagle/lci/actions/workflows/ci.yml/badge.svg)](https://github.com/standardbeagle/lci/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/standardbeagle/lci)](https://goreportcard.com/report/github.com/standardbeagle/lci)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
