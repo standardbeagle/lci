@@ -1,3 +1,5 @@
+> **Retired 2026-10-03; active work is lci-cpp.**
+
 # LCI - Lightning Code Index
 
 Lightning-fast code indexing and search for AI assistants.
